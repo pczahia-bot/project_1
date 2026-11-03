@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'register_page.dart';
+
 class CustomerLoginPage extends StatefulWidget {
   const CustomerLoginPage({super.key});
 
@@ -91,6 +93,13 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
         setState(() => _loading = false);
       }
     }
+  }
+
+  void _openRegister() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const RegisterPage()),
+    );
   }
 
   InputDecoration _decoration({
@@ -297,6 +306,31 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
                               ),
                             ),
                     ),
+                  ),
+                  const SizedBox(height: 18),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      const Text(
+                        'ليس لديك حساب؟',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 14,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _openRegister,
+                        child: const Text(
+                          'أنشئ حساب الآن',
+                          style: TextStyle(
+                            color: Color(0xFF16A34A),
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

@@ -238,7 +238,12 @@ class _HomePageState extends State<HomePage> {
         : MediaQuery.of(context).size.width * .78;
     final pages = _isTechnician
         ? <Widget>[
-            TechnicianRequestsPage(key: _availableKey, showAvailable: true),
+            TechnicianRequestsPage(
+              key: _availableKey,
+              showAvailable: true,
+              // بعد قبول الطلب ننتقل تلقائيًا لتبويب الطلبات الجارية
+              onAccepted: () => _selectTab(2),
+            ),
             AccountPage(
               onOpenAvailable: () => _selectTab(0),
               onOpenOngoing: () => _selectTab(2),
@@ -1272,12 +1277,6 @@ class ServicesPage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _PageHeading(
-            title: 'كل الخدمات',
-            subtitle: 'اختار القسم ثم الخدمة اللي محتاجها',
-            icon: Icons.grid_view_rounded,
-          ),
-          const SizedBox(height: 22),
           _buildServiceSection(
             context,
             title: 'الصيانات الفنية',
@@ -1615,7 +1614,15 @@ String _arabicRequestStatus(String? status) {
 
 class TechnicianRequestsPage extends StatefulWidget {
   final bool showAvailable;
-  const TechnicianRequestsPage({super.key, required this.showAvailable});
+
+  // يُستدعى بعد قبول الطلب بنجاح (للانتقال لتبويب الطلبات الجارية)
+  final VoidCallback? onAccepted;
+
+  const TechnicianRequestsPage({
+    super.key,
+    required this.showAvailable,
+    this.onAccepted,
+  });
 
   @override
   State<TechnicianRequestsPage> createState() =>
@@ -1642,7 +1649,6 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   String? _error;
   String? _acceptingId;
   String? _advancingId;
-  final Set<String> _expandedIds = {};
   List<Map<String, dynamic>> _rows = [];
   RealtimeChannel? _techChannel;
 
@@ -1714,7 +1720,7 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   List<Map<String, dynamic>> get _mine => _rows
       .where((r) =>
           r['technician_id'] == _uid &&
-          const ['accepted', 'on_the_way', 'in_progress', 'completed']
+          const ['accepted', 'on_the_way', 'in_progress']
               .contains(r['status']))
       .toList();
 
@@ -1742,6 +1748,7 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
         const SnackBar(content: Text('تم قبول الطلب بنجاح')),
       );
       await _load();
+      if (mounted) widget.onAccepted?.call();
     } on PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1759,13 +1766,19 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   }
 
   Future<void> _advanceStatus(String id) async {
+    final isFinishing = _rows.any(
+        (r) => r['id'].toString() == id && r['status'] == 'in_progress');
     setState(() => _advancingId = id);
     try {
       final res = await _supabase.rpc('advance_request_status', params: {'p_request_id': id});
       if (!mounted) return;
       if (res is Map && res['success'] == true) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الانتقال للمرحلة التالية بنجاح')),
+          SnackBar(
+            content: Text(isFinishing
+                ? 'تم إنهاء الطلب وإزالته من الطلبات الجارية'
+                : 'تم الانتقال للمرحلة التالية بنجاح'),
+          ),
         );
         await _load();
       } else {
@@ -1779,6 +1792,19 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
     } finally {
       if (mounted) setState(() => _advancingId = null);
     }
+  }
+
+  // فتح صفحة تفاصيل الطلب (عرض فقط بدون تعديل)
+  void _openDetails(Map<String, dynamic> r) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RequestDetailsPage(
+          request: _maintenanceRequestFromRow(r),
+          forTechnician: true,
+        ),
+      ),
+    );
   }
 
   String _visitText(Map<String, dynamic> r) {
@@ -1867,18 +1893,9 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
 
   Widget _card(Map<String, dynamic> r) {
     final id = r['id'].toString();
-    final imagesCount = (r['image_urls'] as List?)?.length ?? 0;
     final canAccept = _showAvailable;
     final accepting = _acceptingId == id;
     final advancing = _advancingId == id;
-    final expanded = _expandedIds.contains(id);
-    final latitude = r['latitude']?.toString() ?? '';
-    final longitude = r['longitude']?.toString() ?? '';
-    final hasCoordinates = latitude.isNotEmpty && longitude.isNotEmpty;
-    final phone =
-        r['customer_phone']?.toString() ?? r['phone']?.toString() ?? '';
-    final customerName =
-        r['customer_name']?.toString() ?? r['full_name']?.toString() ?? '';
     final status = r['status']?.toString();
 
     String nextButtonLabel = 'الانتقال للمرحلة التالية';
@@ -1930,60 +1947,19 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
             r['description']?.toString().isNotEmpty == true
                 ? r['description'].toString()
                 : 'لا يوجد وصف إضافي للعطل',
-            maxLines: expanded ? null : 2,
-            overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 8),
           _detailLine(Icons.location_on_outlined, 'العنوان',
               r['address']?.toString() ?? ''),
           _detailLine(Icons.event_outlined, 'موعد الزيارة', _visitText(r)),
-          if (expanded) ...[
-            _detailLine(Icons.person_outline, 'اسم العميل', customerName),
-            _detailLine(Icons.phone_outlined, 'هاتف العميل', phone),
-            if (hasCoordinates)
-              _detailLine(
-                  Icons.map_outlined, 'الإحداثيات', '$latitude, $longitude'),
-            _detailLine(
-                Icons.calendar_today_outlined,
-                'تاريخ الطلب',
-                r['created_at'] == null
-                    ? ''
-                    : _formatDateTime(
-                        DateTime.tryParse(r['created_at'].toString())
-                            ?.toLocal())),
-            if (imagesCount > 0)
-              _detailLine(Icons.photo_library_outlined, 'الصور المرفقة',
-                  '$imagesCount صورة مرفقة بالطلب'),
-            if (r['notes'] != null)
-              _detailLine(
-                  Icons.notes_outlined, 'ملاحظات', r['notes'].toString()),
-          ],
           const SizedBox(height: 10),
           OutlinedButton.icon(
-            onPressed: () => setState(() {
-              if (expanded) {
-                _expandedIds.remove(id);
-              } else {
-                _expandedIds.add(id);
-              }
-            }),
-            icon: Icon(expanded ? Icons.expand_less : Icons.expand_more),
-            label: Text(expanded ? 'إخفاء التفاصيل' : 'تفاصيل الطلب'),
+            onPressed: () => _openDetails(r),
+            icon: const Icon(Icons.visibility_outlined),
+            label: const Text('تفاصيل الطلب'),
           ),
-          if (expanded && r['address'] != null) ...[
-            TextButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(
-                    ClipboardData(text: r['address'].toString()));
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('تم نسخ العنوان')),
-                );
-              },
-              icon: const Icon(Icons.copy),
-              label: const Text('نسخ العنوان'),
-            ),
-          ],
           if (canAccept) ...[
             const SizedBox(height: 8),
             SizedBox(
@@ -2045,7 +2021,7 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
           child: Text(
             _showAvailable
                 ? 'لا توجد طلبات متاحة لتخصصاتك حاليًا'
-                : 'لم تقبل أي طلب بعد',
+                : 'لا توجد طلبات جارية حاليًا',
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
           ),
         ),
@@ -2698,16 +2674,48 @@ String _formatDateTime(DateTime? dateTime) {
   return '$date - $hour:$minute';
 }
 
+// تحويل صف من جدول service_requests إلى كائن MaintenanceRequest
+MaintenanceRequest _maintenanceRequestFromRow(Map<String, dynamic> row) {
+  final requestId = row['id'].toString();
+  final visitAt = row['visit_at'];
+  final imageUrls = row['image_urls'] as List? ?? [];
+  final createdAt =
+      DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now();
+
+  return MaintenanceRequest(
+    id: requestId,
+    number:
+        'SY-${requestId.substring(0, requestId.length < 8 ? requestId.length : 8).toUpperCase()}',
+    service: row['service_type']?.toString() ?? '',
+    description: row['description']?.toString() ?? '',
+    address: row['address']?.toString() ?? '',
+    visitType: visitAt == null ? 'emergency' : 'scheduled',
+    visitDateTime: visitAt == null
+        ? null
+        : DateTime.tryParse(visitAt.toString())?.toLocal(),
+    imagesCount: imageUrls.length,
+    imageUrls: imageUrls.map((e) => e.toString()).toList(),
+    createdAt: createdAt.toLocal(),
+    latitude: (row['latitude'] as num?)?.toDouble(),
+    longitude: (row['longitude'] as num?)?.toDouble(),
+    status: _arabicRequestStatus(row['status']?.toString()),
+  );
+}
+
 class RequestDetailsPage extends StatefulWidget {
   final MaintenanceRequest request;
   final VoidCallback? onEdit;
   final VoidCallback? onCancel;
+
+  // عرض الفني: بدون تعديل أو إلغاء، وبدون الملاحظة الموجهة للعميل
+  final bool forTechnician;
 
   const RequestDetailsPage({
     super.key,
     required this.request,
     this.onEdit,
     this.onCancel,
+    this.forTechnician = false,
   });
 
   @override
@@ -2717,11 +2725,13 @@ class RequestDetailsPage extends StatefulWidget {
 class _RequestDetailsPageState extends State<RequestDetailsPage> {
   late String currentStatus;
   RealtimeChannel? _channel;
+  late final Future<List<String>> _imagesFuture;
 
   @override
   void initState() {
     super.initState();
     currentStatus = widget.request.status;
+    _imagesFuture = _loadImageUrls();
     _listenRealtime();
   }
 
@@ -2774,65 +2784,525 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     }
   }
 
-  Widget _progressView(String status) {
-    const stages = ['accepted', 'on_the_way', 'in_progress', 'completed'];
+  // ---------------------------------------------------------------
+  // ألوان وأيقونات
+  // ---------------------------------------------------------------
 
-    String dbKey = 'accepted';
-    if (status == 'الفني في الطريق') dbKey = 'on_the_way';
-    if (status == 'جاري التنفيذ') dbKey = 'in_progress';
-    if (status == 'مكتمل') dbKey = 'completed';
+  bool get _tech => widget.forTechnician;
 
-    final current = stages.indexOf(dbKey);
-    final safeCurrent = current < 0 ? 0 : current;
-    const labels = ['تم القبول', 'في الطريق', 'جاري التنفيذ', 'مكتمل'];
+  Color get _accent =>
+      _tech ? const Color(0xFF0E7490) : const Color(0xFF1769E0);
+  Color get _accentDark =>
+      _tech ? const Color(0xFF164E63) : const Color(0xFF0B3C91);
+  Color get _pageBg =>
+      _tech ? const Color(0xFFEEF6F8) : const Color(0xFFF1F5FB);
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 14, bottom: 10),
+  Color get _statusColor {
+    switch (currentStatus) {
+      case 'بانتظار قبول فني':
+        return const Color(0xFFF59E0B);
+      case 'تم قبول الطلب':
+        return const Color(0xFF1769E0);
+      case 'الفني في الطريق':
+        return const Color(0xFF7C3AED);
+      case 'جاري التنفيذ':
+        return const Color(0xFFEA580C);
+      case 'مكتمل':
+        return const Color(0xFF16A34A);
+      case 'ملغي':
+        return const Color(0xFFDC2626);
+      default:
+        return _accent;
+    }
+  }
+
+  IconData get _statusIcon {
+    switch (currentStatus) {
+      case 'بانتظار قبول فني':
+        return Icons.hourglass_top_rounded;
+      case 'تم قبول الطلب':
+        return Icons.check_circle_outline;
+      case 'الفني في الطريق':
+        return Icons.directions_car_rounded;
+      case 'جاري التنفيذ':
+        return Icons.build_circle_outlined;
+      case 'مكتمل':
+        return Icons.verified_rounded;
+      case 'ملغي':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.info_outline;
+    }
+  }
+
+  IconData _serviceIcon(String service) {
+    if (service.contains('كهرب')) return Icons.electrical_services_rounded;
+    if (service.contains('سباك')) return Icons.plumbing_rounded;
+    if (service.contains('تكييف')) return Icons.ac_unit_rounded;
+    if (service.contains('نجار')) return Icons.carpenter_rounded;
+    if (service.contains('نقاش')) return Icons.format_paint_rounded;
+    if (service.contains('غسال')) return Icons.local_laundry_service_rounded;
+    if (service.contains('ثلاج') || service.contains('فريزر')) {
+      return Icons.kitchen_rounded;
+    }
+    if (service.contains('شاش')) return Icons.tv_rounded;
+    if (service.contains('تنظيف')) return Icons.cleaning_services_rounded;
+    if (service.contains('حشرات')) return Icons.pest_control_rounded;
+    if (service.contains('تعقيم')) return Icons.sanitizer_rounded;
+    if (service.contains('نقل')) return Icons.local_shipping_rounded;
+    if (service.contains('تركيب')) return Icons.build_rounded;
+    return Icons.home_repair_service_rounded;
+  }
+
+  // ---------------------------------------------------------------
+  // الصور (روابط موقّعة لأن الـ bucket خاص)
+  // ---------------------------------------------------------------
+
+  Future<List<String>> _loadImageUrls() async {
+    final paths = widget.request.imageUrls;
+    if (paths.isEmpty) return [];
+    final storage = Supabase.instance.client.storage.from('service-images');
+    final urls = <String>[];
+    for (final path in paths) {
+      try {
+        urls.add(await storage.createSignedUrl(path, 3600));
+      } catch (_) {
+        // نتجاهل الصورة التي تعذر تحميلها
+      }
+    }
+    return urls;
+  }
+
+  void _openImage(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: const EdgeInsets.all(12),
+        child: SizedBox(
+          width: double.infinity,
+          height: MediaQuery.of(ctx).size.height * 0.7,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  child: Image.network(
+                    url,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const Center(
+                      child: Icon(Icons.broken_image_outlined,
+                          color: Colors.white54, size: 48),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 4,
+                right: 4,
+                child: IconButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copy(String text, String message) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  // ---------------------------------------------------------------
+  // مكونات الواجهة
+  // ---------------------------------------------------------------
+
+  Widget _decorCircle(double size, double alpha) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white.withValues(alpha: alpha),
+      ),
+    );
+  }
+
+  Widget _statusPill() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+      ),
       child: Row(
-        children: List.generate(stages.length, (i) {
-          final done = i <= safeCurrent;
-          return Expanded(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_statusIcon, color: _statusColor, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            currentStatus,
+            style: TextStyle(
+              color: _statusColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header() {
+    final r = widget.request;
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [_accent, _accentDark],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30)),
+      ),
+      child: Stack(
+        children: [
+          Positioned(left: -40, top: -20, child: _decorCircle(150, 0.07)),
+          Positioned(right: -30, bottom: -50, child: _decorCircle(130, 0.06)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 26),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Expanded(
-                    child: Container(
-                      height: 4,
-                      color: i == 0
-                          ? Colors.transparent
-                          : (done ? const Color(0xFF1769E0) : Colors.grey.shade300),
+                Row(
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Icon(
+                        _serviceIcon(r.service),
+                        color: Colors.white,
+                        size: 30,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            r.service,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () =>
+                                _copy(r.number, 'تم نسخ رقم الطلب'),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.16),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    r.number,
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  const Icon(Icons.copy_rounded,
+                                      size: 13, color: Colors.white70),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _statusPill(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({
+    required String title,
+    required IconData icon,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: _accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: _accent, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _infoTile({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required String value,
+    Widget? trailing,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    value.trim().isEmpty ? '—' : value,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      height: 1.4,
                     ),
                   ),
-                  CircleAvatar(
-                    radius: 12,
-                    backgroundColor: done
-                        ? const Color(0xFF1769E0)
-                        : Colors.grey.shade300,
-                    child: Icon(
-                      done ? Icons.check : Icons.circle,
-                      size: 13,
-                      color: Colors.white,
+                ],
+              ),
+            ),
+          ),
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
+  }
+
+  Widget _stateBanner() {
+    final cancelled = currentStatus == 'ملغي';
+    final color = _statusColor;
+    final text = cancelled
+        ? 'تم إلغاء هذا الطلب.'
+        : (_tech
+            ? 'هذا الطلب متاح للقبول من الفنيين المناسبين.'
+            : 'طلبك وصل للفنيين المناسبين، وبمجرد قبول أحدهم ستظهر مراحل التنفيذ هنا.');
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        children: [
+          Icon(_statusIcon, color: color, size: 26),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(height: 1.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _progressCard() {
+    const labels = [
+      'تم قبول الطلب',
+      'الفني في الطريق',
+      'جاري التنفيذ',
+      'مكتمل',
+    ];
+    const hints = [
+      'تم تعيين فني لطلبك',
+      'الفني متجه إلى موقع الصيانة',
+      'الفني يعمل على حل المشكلة',
+      'تم إنهاء الخدمة بنجاح',
+    ];
+
+    final finished = currentStatus == 'مكتمل';
+    var current = 0;
+    if (currentStatus == 'الفني في الطريق') current = 1;
+    if (currentStatus == 'جاري التنفيذ') current = 2;
+    if (finished) current = 3;
+
+    return _sectionCard(
+      title: 'مراحل الطلب',
+      icon: Icons.timeline_rounded,
+      child: Column(
+        children: List.generate(labels.length, (i) {
+          final done = i < current || finished;
+          final active = i == current && !finished;
+          final reached = done || active;
+          final dotColor = done
+              ? const Color(0xFF16A34A)
+              : (active ? _accent : Colors.grey.shade300);
+          final isLast = i == labels.length - 1;
+
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: 30,
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: dotColor,
+                          boxShadow: active
+                              ? [
+                                  BoxShadow(
+                                    color: _accent.withValues(alpha: 0.3),
+                                    blurRadius: 0,
+                                    spreadRadius: 4,
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: Icon(
+                          done
+                              ? Icons.check_rounded
+                              : (active
+                                  ? Icons.more_horiz_rounded
+                                  : Icons.circle),
+                          size: done || active ? 16 : 8,
+                          color: Colors.white,
+                        ),
+                      ),
+                      if (!isLast)
+                        Expanded(
+                          child: Container(
+                            width: 3,
+                            margin: const EdgeInsets.symmetric(vertical: 3),
+                            decoration: BoxDecoration(
+                              color: done
+                                  ? const Color(0xFF16A34A)
+                                  : Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: isLast ? 0 : 18, top: 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          labels[i],
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight:
+                                reached ? FontWeight.bold : FontWeight.w500,
+                            color: reached ? Colors.black87 : Colors.grey,
+                          ),
+                        ),
+                        if (active || (finished && isLast))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              hints[i],
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                  Expanded(
-                    child: Container(
-                      height: 4,
-                      color: i == stages.length - 1
-                          ? Colors.transparent
-                          : (i < safeCurrent
-                              ? const Color(0xFF1769E0)
-                              : Colors.grey.shade300),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 6),
-                Text(labels[i],
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: done ? const Color(0xFF1769E0) : Colors.grey,
-                      fontWeight: done ? FontWeight.bold : FontWeight.normal,
-                    )),
+                ),
               ],
             ),
           );
@@ -2841,116 +3311,313 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF6F8FC),
-        appBar: AppBar(
-          title: const Text('تفاصيل الطلب'),
-          backgroundColor: Colors.white,
-        ),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.request.service,
-                      style: const TextStyle(
-                          fontSize: 21, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Text('رقم الطلب: ${widget.request.number}',
-                      style: const TextStyle(color: Colors.grey)),
-                  const Divider(height: 28),
-                  _detailRow('حالة الطلب', currentStatus),
-                  if (currentStatus != 'بانتظار قبول فني' &&
-                      currentStatus != 'ملغي')
-                    _progressView(currentStatus),
-                  _detailRow(
-                      'نوع الزيارة',
-                      widget.request.visitType == 'emergency'
-                          ? 'طارئة الآن'
-                          : 'زيارة بموعد'),
-                  _detailRow(
-                      'موعد الزيارة',
-                      widget.request.visitType == 'emergency'
-                          ? 'في أقرب وقت'
-                          : _formatDateTime(widget.request.visitDateTime)),
-                  _detailRow('العنوان', widget.request.address),
-                  _detailRow('وصف المشكلة', widget.request.description),
-                  _detailRow('الصور المرفقة', '${widget.request.imagesCount} صورة'),
-                  _detailRow('تاريخ إنشاء الطلب',
-                      _formatDateTime(widget.request.createdAt)),
-                ],
+  Widget _detailsCard() {
+    final r = widget.request;
+    final emergency = r.visitType == 'emergency';
+
+    return _sectionCard(
+      title: 'بيانات الطلب',
+      icon: Icons.assignment_outlined,
+      child: Column(
+        children: [
+          _infoTile(
+            icon: emergency ? Icons.bolt_rounded : Icons.event_available,
+            color: emergency
+                ? const Color(0xFFEA580C)
+                : const Color(0xFF2563EB),
+            label: 'نوع الزيارة',
+            value: emergency ? 'طارئة الآن' : 'زيارة بموعد',
+          ),
+          const SizedBox(height: 10),
+          _infoTile(
+            icon: Icons.schedule_rounded,
+            color: const Color(0xFF0D9488),
+            label: 'موعد الزيارة',
+            value: emergency
+                ? 'في أقرب وقت'
+                : _formatDateTime(r.visitDateTime),
+          ),
+          const SizedBox(height: 10),
+          _infoTile(
+            icon: Icons.location_on_rounded,
+            color: const Color(0xFFE11D48),
+            label: 'العنوان',
+            value: r.address,
+            trailing: IconButton(
+              tooltip: 'نسخ العنوان',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _copy(r.address, 'تم نسخ العنوان'),
+              icon: Icon(Icons.copy_rounded,
+                  size: 20, color: Colors.grey.shade600),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _infoTile(
+            icon: Icons.description_outlined,
+            color: const Color(0xFF7C3AED),
+            label: 'وصف المشكلة',
+            value:
+                r.description.trim().isEmpty ? 'لا يوجد وصف إضافي' : r.description,
+          ),
+          const SizedBox(height: 10),
+          _infoTile(
+            icon: Icons.calendar_today_rounded,
+            color: const Color(0xFF475569),
+            label: 'تاريخ إنشاء الطلب',
+            value: _formatDateTime(r.createdAt),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _imagesCard() {
+    final count = widget.request.imagesCount;
+    return _sectionCard(
+      title: 'الصور المرفقة ($count)',
+      icon: Icons.photo_library_outlined,
+      child: FutureBuilder<List<String>>(
+        future: _imagesFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const SizedBox(
+              height: 96,
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2.5)),
+            );
+          }
+          final urls = snapshot.data ?? [];
+          if (urls.isEmpty) {
+            return Text(
+              'تعذر عرض الصور حاليًا.',
+              style: TextStyle(color: Colors.grey.shade600),
+            );
+          }
+          return SizedBox(
+            height: 96,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: urls.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, i) {
+                final url = urls[i];
+                return GestureDetector(
+                  onTap: () => _openImage(url),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(
+                      url,
+                      width: 96,
+                      height: 96,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          width: 96,
+                          height: 96,
+                          color: Colors.grey.shade200,
+                        );
+                      },
+                      errorBuilder: (_, _, _) => Container(
+                        width: 96,
+                        height: 96,
+                        color: Colors.grey.shade200,
+                        child: const Icon(Icons.broken_image_outlined,
+                            color: Colors.grey),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _mapCard() {
+    final point = latlong.LatLng(
+      widget.request.latitude!,
+      widget.request.longitude!,
+    );
+    return _sectionCard(
+      title: 'موقع الصيانة',
+      icon: Icons.map_outlined,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 190,
+          child: FlutterMap(
+            options: MapOptions(
+              initialCenter: point,
+              initialZoom: 15,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.none,
               ),
             ),
-            if (widget.onEdit != null || widget.onCancel != null) ...[
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  if (widget.onEdit != null)
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: widget.onEdit,
-                        icon: const Icon(Icons.edit_outlined),
-                        label: const Text('تعديل الطلب'),
-                      ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'project_1',
+                maxZoom: 19,
+              ),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: point,
+                    width: 45,
+                    height: 45,
+                    child: const Icon(
+                      Icons.location_pin,
+                      color: Colors.red,
+                      size: 45,
                     ),
-                  if (widget.onEdit != null && widget.onCancel != null)
-                    const SizedBox(width: 10),
-                  if (widget.onCancel != null)
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: widget.onCancel,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          side: const BorderSide(color: Colors.red),
-                        ),
-                        icon: const Icon(Icons.cancel_outlined),
-                        label: const Text('إلغاء الطلب'),
-                      ),
-                    ),
+                  ),
+                ],
+              ),
+              RichAttributionWidget(
+                attributions: [
+                  TextSourceAttribution(
+                    'OpenStreetMap contributors',
+                    onTap: () {},
+                  ),
                 ],
               ),
             ],
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16)),
-              child: const Text(
-                'يتم تحديث مرحلة تنفيذ طلبك لحظياً بمجرد قيام الفني بالتنقل إلى الخطوة التالية.',
-                style: TextStyle(color: Colors.grey, height: 1.6),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _detailRow(String title, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Column(
+  Widget _actions() {
+    return Row(
+      children: [
+        if (widget.onEdit != null)
+          Expanded(
+            child: SizedBox(
+              height: 50,
+              child: FilledButton.icon(
+                onPressed: widget.onEdit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('تعديل الطلب'),
+              ),
+            ),
+          ),
+        if (widget.onEdit != null && widget.onCancel != null)
+          const SizedBox(width: 10),
+        if (widget.onCancel != null)
+          Expanded(
+            child: SizedBox(
+              height: 50,
+              child: OutlinedButton.icon(
+                onPressed: widget.onCancel,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: const Icon(Icons.cancel_outlined),
+                label: const Text('إلغاء الطلب'),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _customerNote() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _accent.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: const TextStyle(color: Colors.grey, fontSize: 12)),
-          const SizedBox(height: 4),
-          Text(value,
-              style:
-                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          Icon(Icons.info_outline_rounded, color: _accent, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'يتم تحديث مرحلة تنفيذ طلبك لحظيًا بمجرد قيام الفني بالانتقال إلى الخطوة التالية.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                height: 1.6,
+                fontSize: 13,
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.request;
+    final waiting = currentStatus == 'بانتظار قبول فني';
+    final showProgress = !waiting && currentStatus != 'ملغي';
+    // الفني لا يرى موقع الخريطة الدقيق قبل قبول الطلب
+    final showMap =
+        r.latitude != null && r.longitude != null && !(_tech && waiting);
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: _pageBg,
+        appBar: AppBar(
+          title: const Text(
+            'تفاصيل الطلب',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          centerTitle: true,
+          backgroundColor: _accent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+        ),
+        body: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            _header(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (showProgress) _progressCard() else _stateBanner(),
+                  const SizedBox(height: 16),
+                  _detailsCard(),
+                  if (r.imagesCount > 0) ...[
+                    const SizedBox(height: 16),
+                    _imagesCard(),
+                  ],
+                  if (showMap) ...[
+                    const SizedBox(height: 16),
+                    _mapCard(),
+                  ],
+                  if (widget.onEdit != null || widget.onCancel != null) ...[
+                    const SizedBox(height: 16),
+                    _actions(),
+                  ],
+                  if (!_tech) ...[
+                    const SizedBox(height: 16),
+                    _customerNote(),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3425,8 +4092,10 @@ class _AccountPageState extends State<AccountPage> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
-                const SizedBox(height: 10),
-                _roleBadge(),
+                if (_isTechnician) ...[
+                  const SizedBox(height: 10),
+                  _roleBadge(),
+                ],
               ],
             ),
           ),
@@ -3609,13 +4278,17 @@ class _AccountPageState extends State<AccountPage> {
     return _card(
       child: Column(
         children: [
+          if (!_isTechnician) ...[
+            _infoRow(Icons.person_outline, 'الاسم', _displayName),
+            const Divider(height: 1),
+          ],
           _infoRow(
               Icons.email_outlined, 'البريد الإلكتروني', _user?.email ?? '-'),
           if (phone != null && phone.isNotEmpty) ...[
             const Divider(height: 1),
             _infoRow(Icons.phone_outlined, 'رقم الهاتف', phone),
           ],
-          if (created != null) ...[
+          if (_isTechnician && created != null) ...[
             const Divider(height: 1),
             _infoRow(
               Icons.calendar_month_outlined,
@@ -3659,6 +4332,29 @@ class _AccountPageState extends State<AccountPage> {
     );
   }
 
+  // زر تسجيل الخروج: أيقونة فقط أعلى يسار الصفحة
+  Widget _logoutButton() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Semantics(
+        button: true,
+        label: 'تسجيل الخروج',
+        child: Material(
+          color: Colors.red.withValues(alpha: 0.1),
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: _confirmLogout,
+            child: const Padding(
+              padding: EdgeInsets.all(10),
+              child: Icon(Icons.logout_rounded, color: Colors.red, size: 22),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _menuCard() {
     final tiles = <Widget>[
       if (_isTechnician) ...[
@@ -3678,18 +4374,6 @@ class _AccountPageState extends State<AccountPage> {
           title: 'طلباتي',
           onTap: widget.onOpenRequests!,
         ),
-      _menuTile(
-        icon: Icons.edit_outlined,
-        title: 'تعديل الاسم',
-        onTap: _editName,
-      ),
-      _menuTile(
-        icon: Icons.logout_rounded,
-        title: 'تسجيل الخروج',
-        color: Colors.red,
-        showArrow: false,
-        onTap: _confirmLogout,
-      ),
     ];
 
     final children = <Widget>[];
@@ -3710,6 +4394,8 @@ class _AccountPageState extends State<AccountPage> {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
           children: [
+            _logoutButton(),
+            const SizedBox(height: 10),
             _headerCard(),
             const SizedBox(height: 16),
             _statsRow(),
@@ -4235,6 +4921,7 @@ class _RequestPageState extends State<RequestPage> {
     });
 
     final uploadedPaths = <String>[];
+    MaintenanceRequest? createdRequest;
 
     try {
       for (int i = 0; i < selectedImages.length; i++) {
@@ -4304,10 +4991,37 @@ class _RequestPageState extends State<RequestPage> {
           'image_urls': allImagePaths,
           'status': 'pending',
         };
-        await supabase.from('service_requests').insert(requestData);
+        final inserted = await supabase
+            .from('service_requests')
+            .insert(requestData)
+            .select()
+            .single();
+        createdRequest =
+            _maintenanceRequestFromRow(Map<String, dynamic>.from(inserted));
       }
 
       if (!mounted) return;
+
+      // طلب جديد: الانتقال فورًا لصفحة تفاصيل الطلب + رسالة أسفل الشاشة 3 ثوانٍ
+      final created = createdRequest;
+      if (!isEditMode && created != null) {
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.hideCurrentSnackBar();
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => RequestDetailsPage(request: created),
+          ),
+        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('تم إرسال طلبك بنجاح'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        });
+        return;
+      }
 
       final visitDetails = visitType == 'emergency'
           ? 'نوع الزيارة: طارئة الآن'

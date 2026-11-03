@@ -375,16 +375,29 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                       const SizedBox(height: 18),
-                      TextButton(
-                        onPressed: _openTechnicianApplication,
-                        child: const Text(
-                          'لسه معندكش حساب فني؟ قدّم طلب انضمام',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: _primaryColor,
-                            fontWeight: FontWeight.bold,
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text(
+                            'لسه معندكش حساب فني؟',
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 14,
+                            ),
                           ),
-                        ),
+                          TextButton(
+                            onPressed: _openTechnicianApplication,
+                            child: const Text(
+                              'قدّم طلب انضمام',
+                              style: TextStyle(
+                                color: Color(0xFF16A34A),
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
