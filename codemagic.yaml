@@ -7,11 +7,11 @@ workflows:
       flutter: stable
       xcode: latest
     triggering:
-    events:
-      - push
-    branch_patterns:
-      - pattern: main
-        include: true
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          source: true
     scripts:
       - name: Get Flutter packages
         script: flutter packages get
@@ -23,6 +23,6 @@ workflows:
 
       - name: Build APK Release
         script: flutter build apk --release
-
+        
     artifacts:
       - build/**/outputs/**/*.apk
