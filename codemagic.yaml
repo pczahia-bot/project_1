@@ -19,6 +19,7 @@ workflows:
       - name: Print Android SHA-1 Key
         script: |
           cd android
+          chmod +x gradlew
           ./gradlew signingReport
 
       - name: Build APK Release

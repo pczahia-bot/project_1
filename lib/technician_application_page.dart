@@ -1,7 +1,6 @@
-
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import 'login_page.dart';
 
 const Color technicianPrimaryColor = Color(0xFF176B65);
@@ -18,18 +17,10 @@ class _TechnicianApplicationPageState
     extends State<TechnicianApplicationPage> {
   final _formKey = GlobalKey<FormState>();
 
-  final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
-
   final Set<String> _selectedServices = {};
-
   String _serviceArea = 'المنصورة';
   bool _isLoading = false;
-  bool _showPassword = false;
-  bool _showConfirmPassword = false;
 
   final List<String> _services = [
     'سباكة',
@@ -46,11 +37,7 @@ class _TechnicianApplicationPageState
 
   @override
   void dispose() {
-    _nameController.dispose();
     _phoneController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -63,13 +50,11 @@ class _TechnicianApplicationPageState
   void _openTechnicianLogin() {
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (context) => const LoginPage(),
-      ),
+      MaterialPageRoute(builder: (context) => const LoginPage()),
     );
   }
 
-  Future<void> _submitApplication() async {
+  Future<void> _submitApplicationWithGoogle() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedServices.isEmpty) {
@@ -80,32 +65,56 @@ class _TechnicianApplicationPageState
     setState(() => _isLoading = true);
 
     try {
-      final response = await supabase.auth.signUp(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-        data: {
-          'full_name': _nameController.text.trim(),
-          'account_type': 'technician',
-          'phone': _phoneController.text.trim(),
-          'service_area': _serviceArea,
-          'technician_services': _selectedServices.toList(),
-        },
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+      final googleUser = await googleSignIn.signIn();
+
+      if (googleUser == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final accessToken = googleAuth.accessToken;
+      final idToken = googleAuth.idToken;
+
+      if (accessToken == null || idToken == null) {
+        throw 'فشل في جلب بيانات المصادقة من جوجل';
+      }
+
+      // 1. تسجيل الدخول عبر Google OAuth في Supabase
+      final response = await supabase.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        accessToken: accessToken,
       );
 
       if (!mounted) return;
 
-      if (response.session == null) {
-        _showMessage(
-          'تم إنشاء الحساب وإرسال طلب الانضمام. أكّد بريدك الإلكتروني، وسيتم إبلاغك بعد مراجعة الإدارة.',
-        );
-        Navigator.of(context).popUntil((route) => route.isFirst);
-        return;
+      final user = response.user;
+      if (user == null) {
+        throw 'فشل التعرف على المستخدم';
       }
 
+      final fullName = googleUser.displayName ?? 'فني صيانة';
+
+      // 2. تحديث الـ metadata ليكون الحساب فنياً
+      await supabase.auth.updateUser(
+        UserAttributes(
+          data: {
+            'full_name': fullName,
+            'account_type': 'technician',
+            'phone': _phoneController.text.trim(),
+            'service_area': _serviceArea,
+            'technician_services': _selectedServices.toList(),
+          },
+        ),
+      );
+
+      // 3. إرسال أو حفظ بيانات الطلب في قاعدة البيانات عبر RPC
       await supabase.rpc(
         'submit_technician_application',
         params: {
-          'p_full_name': _nameController.text.trim(),
+          'p_full_name': fullName,
           'p_phone': _phoneController.text.trim(),
           'p_service_area': _serviceArea,
           'p_services': _selectedServices.toList(),
@@ -116,12 +125,10 @@ class _TechnicianApplicationPageState
 
       _showMessage('تم إرسال طلب الانضمام بنجاح، وسيتم مراجعته من الإدارة.');
 
-      // الحساب لم يُعتمد بعد، فنسجّل الخروج ونرجع للشاشة الرئيسية
+      // تسجيل الخروج لعدم السماح بالدخول حتى تتم الموافقة
       await supabase.auth.signOut();
       if (!mounted) return;
       Navigator.of(context).popUntil((route) => route.isFirst);
-    } on AuthException catch (e) {
-      if (mounted) _showMessage(e.message);
     } on PostgrestException catch (e) {
       if (mounted) {
         _showMessage('تم إنشاء الحساب، لكن تعذر حفظ طلب الانضمام: ${e.message}');
@@ -137,89 +144,13 @@ class _TechnicianApplicationPageState
     }
   }
 
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    TextInputType keyboardType = TextInputType.text,
-    bool isPassword = false,
-    bool isConfirmPassword = false,
-  }) {
-    final obscure = isPassword
-        ? !_showPassword
-        : isConfirmPassword
-            ? !_showConfirmPassword
-            : false;
-
-    return TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      obscureText: isPassword || isConfirmPassword ? obscure : false,
-      textDirection: TextDirection.rtl,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, color: technicianPrimaryColor),
-        suffixIcon: isPassword || isConfirmPassword
-            ? IconButton(
-                icon: Icon(
-                  obscure ? Icons.visibility_off : Icons.visibility,
-                ),
-                onPressed: () {
-                  setState(() {
-                    if (isPassword) {
-                      _showPassword = !_showPassword;
-                    } else {
-                      _showConfirmPassword = !_showConfirmPassword;
-                    }
-                  });
-                },
-              )
-            : null,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: technicianPrimaryColor,
-            width: 1.5,
-          ),
-        ),
-      ),
-      validator: (value) {
-        final text = value?.trim() ?? '';
-
-        if (text.isEmpty) return 'هذا الحقل مطلوب';
-
-        if (controller == _emailController &&
-            !RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(text)) {
-          return 'أدخل بريدًا إلكترونيًا صحيحًا';
-        }
-
-        if (isPassword && text.length < 6) {
-          return 'كلمة المرور يجب ألا تقل عن 6 أحرف';
-        }
-
-        if (isConfirmPassword &&
-            text != _passwordController.text) {
-          return 'كلمتا المرور غير متطابقتين';
-        }
-
-        return null;
-      },
-    );
-  }
-
   Widget _buildServicesSelector() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           'التخصصات التي تعمل بها',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -227,7 +158,6 @@ class _TechnicianApplicationPageState
           runSpacing: 8,
           children: _services.map((service) {
             final selected = _selectedServices.contains(service);
-
             return FilterChip(
               label: Text(service),
               selected: selected,
@@ -285,57 +215,36 @@ class _TechnicianApplicationPageState
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'أدخل بياناتك وتخصصاتك لإرسال طلب الانضمام',
+                    'سجل بواسطة جوجل وأدخل تفاصيل تخصصك لإرسال طلب الانضمام',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 25),
 
-                  _buildTextField(
-                    controller: _nameController,
-                    label: 'الاسم بالكامل',
-                    icon: Icons.person_outline,
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildTextField(
-                    controller: _emailController,
-                    label: 'البريد الإلكتروني',
-                    icon: Icons.email_outlined,
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildTextField(
-                    controller: _passwordController,
-                    label: 'كلمة المرور',
-                    icon: Icons.lock_outline,
-                    isPassword: true,
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildTextField(
-                    controller: _confirmPasswordController,
-                    label: 'تأكيد كلمة المرور',
-                    icon: Icons.lock_reset,
-                    isConfirmPassword: true,
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildTextField(
+                  // رقم الهاتف
+                  TextFormField(
                     controller: _phoneController,
-                    label: 'رقم الهاتف للتواصل',
-                    icon: Icons.phone_outlined,
                     keyboardType: TextInputType.phone,
+                    textDirection: TextDirection.rtl,
+                    decoration: InputDecoration(
+                      labelText: 'رقم الهاتف للتواصل',
+                      prefixIcon: const Icon(Icons.phone_outlined, color: technicianPrimaryColor),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'رقم الهاتف مطلوب';
+                      }
+                      return null;
+                    },
                   ),
                   const SizedBox(height: 20),
 
                   const Text(
                     'منطقة العمل',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
 
@@ -351,26 +260,11 @@ class _TechnicianApplicationPageState
                       ),
                     ),
                     items: const [
-                      DropdownMenuItem(
-                        value: 'المنصورة',
-                        child: Text('المنصورة'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'طلخا',
-                        child: Text('طلخا'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'أجا',
-                        child: Text('أجا'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'شربين',
-                        child: Text('شربين'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'ميت غمر',
-                        child: Text('ميت غمر'),
-                      ),
+                      DropdownMenuItem(value: 'المنصورة', child: Text('المنصورة')),
+                      DropdownMenuItem(value: 'طلخا', child: Text('طلخا')),
+                      DropdownMenuItem(value: 'أجا', child: Text('أجا')),
+                      DropdownMenuItem(value: 'شربين', child: Text('شربين')),
+                      DropdownMenuItem(value: 'ميت غمر', child: Text('ميت غمر')),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -378,38 +272,36 @@ class _TechnicianApplicationPageState
                       }
                     },
                   ),
-
                   const SizedBox(height: 22),
 
                   _buildServicesSelector(),
-
                   const SizedBox(height: 28),
 
+                  // زر التسجيل والإرسال عبر جوجل
                   SizedBox(
                     height: 52,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _submitApplication,
+                    child: ElevatedButton.icon(
+                      onPressed: _isLoading ? null : _submitApplicationWithGoogle,
+                      icon: const Icon(Icons.g_mobiledata, size: 32, color: Colors.red),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: technicianPrimaryColor,
-                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black87,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
+                          side: const BorderSide(color: Colors.grey, width: 0.3),
                         ),
                       ),
-                      child: _isLoading
-                          ? const CircularProgressIndicator(
-                              color: Colors.white,
-                            )
+                      label: _isLoading
+                          ? const CircularProgressIndicator()
                           : const Text(
-                              'إرسال طلب الانضمام',
+                              'التسجيل وإرسال الطلب عبر Google',
                               style: TextStyle(
-                                fontSize: 17,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                     ),
                   ),
-
                   const SizedBox(height: 16),
 
                   Row(
