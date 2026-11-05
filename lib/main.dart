@@ -3153,7 +3153,7 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
               ),
             ),
           ),
-          if (trailing != null) trailing,
+          ?trailing,
         ],
       ),
     );

@@ -21,7 +21,7 @@ class _LoginPageState extends State<LoginPage> {
     final supabase = Supabase.instance.client;
 
     try {
-      final GoogleSignIn googleSignIn = GoogleSignIn();
+      final GoogleSignIn googleSignIn = GoogleSignIn(serverClientId: '171719716098-nb5akmdb4b3oomge06p061eq80qmvo2k.apps.googleusercontent.com');
       final googleUser = await googleSignIn.signIn();
 
       if (googleUser == null) {
