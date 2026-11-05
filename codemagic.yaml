@@ -6,6 +6,8 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      android_signing:
+        - my_keystore
     triggering:
       events:
         - push
@@ -16,14 +18,17 @@ workflows:
       - name: Get Flutter packages
         script: flutter packages get
 
-      - name: Print Android SHA-1 Key
+      - name: Create key.properties
         script: |
-          cd android
-          chmod +x gradlew
-          ./gradlew signingReport
+          cat > "$CM_BUILD_DIR/android/key.properties" <<EOF
+          storePassword=$CM_KEYSTORE_PASSWORD
+          keyPassword=$CM_KEY_PASSWORD
+          keyAlias=$CM_KEY_ALIAS
+          storeFile=$CM_KEYSTORE_PATH
+          EOF
 
       - name: Build APK Release
         script: flutter build apk --release
-        
+
     artifacts:
       - build/**/outputs/**/*.apk
