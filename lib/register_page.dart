@@ -1,4 +1,6 @@
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -15,36 +17,50 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _phoneController = TextEditingController();
+
   bool _isLoading = false;
+
   SupabaseClient get supabase => Supabase.instance.client;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    super.dispose();
+  }
 
   void _openTechnicianApplication() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const TechnicianApplicationPage()),
+      MaterialPageRoute(
+        builder: (_) => const TechnicianApplicationPage(),
+      ),
     );
   }
 
   void _openCustomerLogin() {
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const CustomerLoginPage()),
+      MaterialPageRoute(
+        builder: (_) => const CustomerLoginPage(),
+      ),
     );
   }
 
   Future<void> _registerWithGoogle() async {
+    if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isLoading = true);
 
     try {
-      final GoogleSignIn googleSignIn = GoogleSignIn(serverClientId: '171719716098-nb5akmdb4b3oomge06p061eq80qmvo2k.apps.googleusercontent.com');
+      final googleSignIn = GoogleSignIn();
       final googleUser = await googleSignIn.signIn();
 
-      if (googleUser == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
+      if (googleUser == null) return;
 
       final googleAuth = await googleUser.authentication;
+
       final accessToken = googleAuth.accessToken;
       final idToken = googleAuth.idToken;
 
@@ -60,34 +76,31 @@ class _RegisterPageState extends State<RegisterPage> {
 
       if (!mounted) return;
 
-      final user = response.user;
-      if (user == null) {
-        throw 'تعذر الحصول على بيانات الحساب من Supabase';
+      if (response.user == null) {
+        throw 'فشل إنشاء الحساب';
       }
 
-      // منع استخدام حساب فني موجود على أنه حساب عميل.
-      final accountType = user.userMetadata?['account_type'];
-      if (accountType != null && accountType != 'customer') {
-        await supabase.auth.signOut();
-        throw 'هذا الحساب مسجل كفني وليس كعميل';
-      }
+      // حفظ رقم الهاتف وبيانات العميل
+      await supabase.auth.updateUser(
+        UserAttributes(
+          data: {
+            'full_name': googleUser.displayName ?? 'عميل جديد',
+            'account_type': 'customer',
+            'phone': _phoneController.text.trim(),
+          },
+        ),
+      );
 
-      // تعيين نوع الحساب للعميل الجديد فقط، دون تغيير نوع حساب موجود.
-      if (accountType == null) {
-        await supabase.auth.updateUser(
-          UserAttributes(
-            data: {
-              'full_name': googleUser.displayName ?? 'عميل جديد',
-              'account_type': 'customer',
-            },
-          ),
-        );
-      }
+      if (!mounted) return;
 
-      _showMessage('تم إنشاء حسابك وتسجيل الدخول بنجاح.');
+      _showMessage('تم إنشاء حسابك وتسجيل الدخول بنجاح');
+
       Navigator.pop(context);
+
     } catch (e) {
-      if (mounted) _showMessage('حدث خطأ أثناء إنشاء الحساب: $e');
+      if (mounted) {
+        _showMessage('حدث خطأ أثناء إنشاء الحساب: $e');
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -105,7 +118,6 @@ class _RegisterPageState extends State<RegisterPage> {
     return Align(
       alignment: Alignment.centerLeft,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Material(
             color: const Color(0xFFEAF3F4),
@@ -153,78 +165,147 @@ class _RegisterPageState extends State<RegisterPage> {
         body: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _technicianEntry(),
-                const SizedBox(height: 25),
-                const Icon(
-                  Icons.home_repair_service_rounded,
-                  size: 65,
-                  color: primaryColor,
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'مرحبًا بك في صيانتي',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 23,
-                    fontWeight: FontWeight.bold,
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _technicianEntry(),
+                  const SizedBox(height: 25),
+
+                  const Icon(
+                    Icons.home_repair_service_rounded,
+                    size: 65,
                     color: primaryColor,
                   ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'أنشئ حسابك بضغطة زر عبر جوجل لطلب خدمات الصيانة',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, color: Colors.grey),
-                ),
-                const SizedBox(height: 45),
 
-                // زر التسجيل بجوجل
-                SizedBox(
-                  height: 52,
-                  child: ElevatedButton.icon(
-                    onPressed: _isLoading ? null : _registerWithGoogle,
-                    icon: const Icon(Icons.g_mobiledata, size: 32, color: Colors.red),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: Colors.black87,
-                      elevation: 1,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: const BorderSide(color: Colors.grey, width: 0.3),
-                      ),
+                  const SizedBox(height: 10),
+
+                  const Text(
+                    'مرحبًا بك في صيانتي',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 23,
+                      fontWeight: FontWeight.bold,
+                      color: primaryColor,
                     ),
-                    label: _isLoading
-                        ? const CircularProgressIndicator()
-                        : const Text(
-                            'المتابعة بـ Google لإنشاء الحساب',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
                   ),
-                ),
-                const SizedBox(height: 25),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text('لديك حساب بالفعل؟'),
-                    TextButton(
-                      onPressed: _openCustomerLogin,
-                      child: const Text(
-                        'تسجيل الدخول',
-                        style: TextStyle(
+
+                  const SizedBox(height: 8),
+
+                  const Text(
+                    'أدخل رقم هاتفك لإنشاء حسابك وطلب خدمات الصيانة',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey,
+                    ),
+                  ),
+
+                  const SizedBox(height: 35),
+
+                  // رقم هاتف العميل
+                  TextFormField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    textDirection: TextDirection.ltr,
+                    textAlign: TextAlign.right,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(11),
+                    ],
+                    decoration: InputDecoration(
+                      labelText: 'رقم الموبايل',
+                      hintText: '01xxxxxxxxx',
+                      prefixIcon: const Icon(
+                        Icons.phone_android,
+                        color: primaryColor,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
                           color: primaryColor,
-                          fontWeight: FontWeight.bold,
+                          width: 1.5,
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ],
+                    validator: (value) {
+                      final phone = value?.trim() ?? '';
+
+                      if (phone.isEmpty) {
+                        return 'من فضلك أدخل رقم الموبايل';
+                      }
+
+                      if (!RegExp(r'^01[0125][0-9]{8}$')
+                          .hasMatch(phone)) {
+                        return 'أدخل رقم موبايل مصري صحيح مكون من 11 رقمًا';
+                      }
+
+                      return null;
+                    },
+                  ),
+
+                  const SizedBox(height: 25),
+
+                  // التسجيل بجوجل
+                  SizedBox(
+                    height: 52,
+                    child: ElevatedButton.icon(
+                      onPressed: _isLoading
+                          ? null
+                          : _registerWithGoogle,
+                      icon: const Icon(
+                        Icons.g_mobiledata,
+                        size: 32,
+                        color: Colors.red,
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black87,
+                        elevation: 1,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: const BorderSide(
+                            color: Colors.grey,
+                            width: 0.3,
+                          ),
+                        ),
+                      ),
+                      label: _isLoading
+                          ? const CircularProgressIndicator()
+                          : const Text(
+                              'المتابعة بـ Google لإنشاء الحساب',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 25),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text('لديك حساب بالفعل؟'),
+                      TextButton(
+                        onPressed: _openCustomerLogin,
+                        child: const Text(
+                          'تسجيل الدخول',
+                          style: TextStyle(
+                            color: primaryColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),

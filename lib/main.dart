@@ -4,14 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:image_picker/image_picker.dart';
-
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as latlong;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'register_page.dart';
 import 'customer_login_page.dart';
 import 'login_page.dart';
+import 'auth_service.dart';
+import 'models/app_services.dart';
+import 'models/maintenance_request.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,109 +57,6 @@ class SayantiApp extends StatelessWidget {
   }
 }
 
-class MaintenanceRequest {
-  final String id;
-  final String number;
-  final String service;
-  final String description;
-  final String address;
-  final String visitType;
-  final DateTime? visitDateTime;
-  final int imagesCount;
-  final List<String> imageUrls;
-  final DateTime createdAt;
-  final double? latitude;
-  final double? longitude;
-  String status;
-
-  MaintenanceRequest({
-    this.id = '',
-    required this.number,
-    required this.service,
-    required this.description,
-    required this.address,
-    required this.visitType,
-    required this.visitDateTime,
-    required this.imagesCount,
-    this.imageUrls = const [],
-    required this.createdAt,
-    this.latitude,
-    this.longitude,
-    this.status = 'بانتظار قبول فني',
-  });
-}
-
-class _ModernBackgroundHeader extends StatelessWidget {
-  const _ModernBackgroundHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipPath(
-      clipper: _SoftWaveClipper(),
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-            colors: [
-              Color(0xFF0D47A1),
-              Color(0xFF1769E0),
-              Color(0xFF5B9BFA),
-            ],
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -55,
-              right: -35,
-              child: Container(
-                width: 180,
-                height: 180,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: .08),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 55,
-              left: -45,
-              child: Container(
-                width: 135,
-                height: 135,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: .07),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SoftWaveClipper extends CustomClipper<Path> {
-  @override
-  Path getClip(Size size) {
-    return Path()
-      ..lineTo(0, size.height - 38)
-      ..quadraticBezierTo(
-        size.width * .48,
-        size.height + 30,
-        size.width,
-        size.height - 30,
-      )
-      ..lineTo(size.width, 0)
-      ..close();
-  }
-
-  @override
-  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -167,10 +67,22 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int currentIndex = 0;
   bool _isSideMenuOpen = false;
+  // غيّرها إلى true لإرجاع صفحة العروض، وfalse لإخفائها
+  bool _hasOffers = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
   StreamSubscription<AuthState>? _homeAuthSub;
-  bool get _isTechnician =>
-      Supabase.instance.client.auth.currentUser?.userMetadata?['account_type'] ==
-      'technician';
+
+  bool get _isTechnician {
+    final user = Supabase.instance.client.auth.currentUser;
+    return user != null && AuthService.accountTypeOf(user) == 'technician';
+  }
+
+  int _maxIndexFor({required bool isTech, required bool hasOffers}) {
+    if (isTech) return 2;
+    return hasOffers ? 4 : 3;
+  }
+
   final GlobalKey<_TechnicianRequestsPageState> _availableKey =
       GlobalKey<_TechnicianRequestsPageState>();
   final GlobalKey<_TechnicianRequestsPageState> _ongoingKey =
@@ -181,48 +93,53 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _homeAuthSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+    _homeAuthSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
       if (!mounted) return;
-      final isTech = Supabase.instance.client.auth.currentUser
-              ?.userMetadata?['account_type'] ==
-          'technician';
-      setState(() {
-        currentIndex = Supabase.instance.client.auth.currentUser == null
-            ? 0
-            : (isTech ? 0 : 4);
-      });
+
+      if (data.event == AuthChangeEvent.signedIn ||
+          data.event == AuthChangeEvent.signedOut) {
+        final user = Supabase.instance.client.auth.currentUser;
+        final isTech =
+            user != null && AuthService.accountTypeOf(user) == 'technician';
+        final maxIdx = _maxIndexFor(isTech: isTech, hasOffers: _hasOffers);
+        setState(() {
+          if (data.event == AuthChangeEvent.signedOut) {
+            currentIndex = 0;
+          } else if (isTech) {
+            currentIndex = 0;
+          } else {
+            currentIndex = currentIndex.clamp(0, maxIdx);
+          }
+          _isSideMenuOpen = false;
+        });
+      }
     });
   }
 
   @override
   void dispose() {
+    _searchController.dispose();
     _homeAuthSub?.cancel();
     super.dispose();
   }
 
   void _selectTab(int index) {
+    final maxIdx = _maxIndexFor(isTech: _isTechnician, hasOffers: _hasOffers);
+    final safeIndex = index.clamp(0, maxIdx);
     setState(() {
-      currentIndex = index;
+      currentIndex = safeIndex;
       _isSideMenuOpen = false;
     });
     if (_isTechnician) {
-      if (index == 0) _availableKey.currentState?.reload();
-      if (index == 2) _ongoingKey.currentState?.reload();
-    } else if (index == 3) {
-      _myRequestsKey.currentState?.loadRequests();
+      if (safeIndex == 0) _availableKey.currentState?.reload();
+      if (safeIndex == 2) _ongoingKey.currentState?.reload();
+    } else {
+      final myRequestsTabIndex = _hasOffers ? 3 : 2;
+      if (safeIndex == myRequestsTabIndex) {
+        _myRequestsKey.currentState?.loadRequests();
+      }
     }
   }
-
-  final List<Map<String, dynamic>> services = const [
-    {'name': 'كهرباء', 'icon': Icons.electrical_services},
-    {'name': 'سباكة', 'icon': Icons.plumbing},
-    {'name': 'تكييف', 'icon': Icons.ac_unit},
-    {'name': 'نجارة', 'icon': Icons.carpenter},
-    {'name': 'أجهزة منزلية', 'icon': Icons.kitchen},
-    {'name': 'نقاشة', 'icon': Icons.format_paint},
-    {'name': 'تنظيف', 'icon': Icons.cleaning_services},
-    {'name': 'خدمات أخرى', 'icon': Icons.more_horiz},
-  ];
 
   void openRequest(BuildContext context, {String? service}) {
     Navigator.push(
@@ -236,12 +153,12 @@ class _HomePageState extends State<HomePage> {
     final drawerWidth = MediaQuery.of(context).size.width * .78 > 320
         ? 320.0
         : MediaQuery.of(context).size.width * .78;
+
     final pages = _isTechnician
         ? <Widget>[
             TechnicianRequestsPage(
               key: _availableKey,
               showAvailable: true,
-              // بعد قبول الطلب ننتقل تلقائيًا لتبويب الطلبات الجارية
               onAccepted: () => _selectTab(2),
             ),
             AccountPage(
@@ -253,10 +170,14 @@ class _HomePageState extends State<HomePage> {
         : <Widget>[
             _buildHomeContent(),
             const ServicesPage(),
-            const OffersPage(),
+            if (_hasOffers) const OffersPage(),
             MyRequestsPage(key: _myRequestsKey),
-            AccountPage(onOpenRequests: () => _selectTab(3)),
+            AccountPage(
+              onOpenRequests: () => _selectTab(_hasOffers ? 3 : 2),
+            ),
           ];
+
+    final safeIndex = currentIndex.clamp(0, pages.length - 1);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -276,7 +197,7 @@ class _HomePageState extends State<HomePage> {
               children: [
                 _buildTopBar(),
                 Expanded(
-                  child: IndexedStack(index: currentIndex, children: pages),
+                  child: IndexedStack(index: safeIndex, children: pages),
                 ),
               ],
             ),
@@ -296,13 +217,13 @@ class _HomePageState extends State<HomePage> {
               width: drawerWidth,
               child: IgnorePointer(
                 ignoring: !_isSideMenuOpen,
-                child: _buildSideMenu(),
+                child: _buildSideMenu(safeIndex),
               ),
             ),
           ],
         ),
         bottomNavigationBar: BottomNavigationBar(
-          currentIndex: currentIndex,
+          currentIndex: safeIndex,
           onTap: _selectTab,
           type: BottomNavigationBarType.fixed,
           backgroundColor: Colors.white,
@@ -318,16 +239,18 @@ class _HomePageState extends State<HomePage> {
                   BottomNavigationBarItem(
                       icon: Icon(Icons.handyman_outlined), label: 'الجارية'),
                 ]
-              : const [
-                  BottomNavigationBarItem(
+              : [
+                  const BottomNavigationBarItem(
                       icon: Icon(Icons.home), label: 'الرئيسية'),
-                  BottomNavigationBarItem(
+                  const BottomNavigationBarItem(
                       icon: Icon(Icons.grid_view_rounded), label: 'الخدمات'),
-                  BottomNavigationBarItem(
-                      icon: Icon(Icons.local_offer_outlined), label: 'العروض'),
-                  BottomNavigationBarItem(
+                  if (_hasOffers)
+                    const BottomNavigationBarItem(
+                        icon: Icon(Icons.local_offer_outlined),
+                        label: 'العروض'),
+                  const BottomNavigationBarItem(
                       icon: Icon(Icons.receipt_long), label: 'طلباتي'),
-                  BottomNavigationBarItem(
+                  const BottomNavigationBarItem(
                       icon: Icon(Icons.person_outline_rounded), label: 'حسابي'),
                 ],
         ),
@@ -361,11 +284,31 @@ class _HomePageState extends State<HomePage> {
               child: SizedBox(
                 height: 48,
                 child: TextField(
+                  controller: _searchController,
                   textInputAction: TextInputAction.search,
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value.trim();
+                      if (!_isTechnician &&
+                          _searchQuery.isNotEmpty &&
+                          currentIndex != 0) {
+                        currentIndex = 0;
+                      }
+                    });
+                  },
                   decoration: InputDecoration(
                     hintText: 'بتدور على خدمة إيه؟',
                     prefixIcon:
                         const Icon(Icons.search, color: Color(0xFF1769E0)),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, size: 19),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                          )
+                        : null,
                     filled: true,
                     fillColor: Colors.white,
                     contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -406,19 +349,19 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildSideMenu() {
+  Widget _buildSideMenu(int safeIndex) {
     final menuItems = _isTechnician
         ? const [
             ('الطلبات المتاحة', Icons.inbox_outlined, 0),
             ('حسابي', Icons.person_outline_rounded, 1),
             ('الطلبات الجارية', Icons.handyman_outlined, 2),
           ]
-        : const [
-            ('حسابي', Icons.person_outline_rounded, 4),
+        : [
+            ('حسابي', Icons.person_outline_rounded, _hasOffers ? 4 : 3),
             ('الرئيسية', Icons.home_rounded, 0),
             ('الخدمات', Icons.grid_view_rounded, 1),
-            ('العروض', Icons.local_offer_rounded, 2),
-            ('طلباتي', Icons.receipt_long_rounded, 3),
+            if (_hasOffers) ('العروض', Icons.local_offer_rounded, 2),
+            ('طلباتي', Icons.receipt_long_rounded, _hasOffers ? 3 : 2),
           ];
 
     return Material(
@@ -449,11 +392,11 @@ class _HomePageState extends State<HomePage> {
             for (final item in menuItems)
               ListTile(
                 leading: Icon(item.$2,
-                    color: currentIndex == item.$3
+                    color: safeIndex == item.$3
                         ? const Color(0xFF1769E0)
                         : Colors.blueGrey),
                 title: Text(item.$1),
-                selected: currentIndex == item.$3,
+                selected: safeIndex == item.$3,
                 selectedTileColor: const Color(0xFFEAF1FF),
                 onTap: () => _selectTab(item.$3),
               ),
@@ -471,6 +414,72 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHomeContent() {
+    if (_searchQuery.isNotEmpty) {
+      final matches = AppServices.allServices
+          .where((s) => s.contains(_searchQuery))
+          .toList();
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'نتائج البحث عن "$_searchQuery" (${matches.length})',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 14),
+            if (matches.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    const Icon(Icons.search_off_rounded,
+                        size: 46, color: Colors.grey),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'لم نجد خدمة مطابقة لبحثك',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: () =>
+                          openRequest(context, service: 'خدمات أخرى'),
+                      child: const Text('اطلب خدمة مخصصة'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: matches.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 11,
+                  crossAxisSpacing: 11,
+                  childAspectRatio: 1.12,
+                ),
+                itemBuilder: (context, index) {
+                  final serviceName = matches[index];
+                  return _ServiceSquare(
+                    name: serviceName,
+                    icon: Icons.home_repair_service_rounded,
+                    color: const Color(0xFF1769E0),
+                    onTap: () => openRequest(context, service: serviceName),
+                  );
+                },
+              ),
+          ],
+        ),
+      );
+    }
+
     final technical = <Map<String, dynamic>>[
       {'name': 'كهرباء', 'icon': Icons.electrical_services_rounded},
       {'name': 'سباكة', 'icon': Icons.plumbing_rounded},
@@ -497,7 +506,7 @@ class _HomePageState extends State<HomePage> {
             Icon(Icons.location_on_outlined,
                 color: Color(0xFF1769E0), size: 18),
             SizedBox(width: 5),
-            Text('موقعك الحالي: المنصورة، مصر',
+            Text('نطاق الخدمة: المنصورة والدقهلية',
                 style: TextStyle(color: Colors.grey, fontSize: 12)),
           ]),
           const SizedBox(height: 18),
@@ -1614,8 +1623,6 @@ String _arabicRequestStatus(String? status) {
 
 class TechnicianRequestsPage extends StatefulWidget {
   final bool showAvailable;
-
-  // يُستدعى بعد قبول الطلب بنجاح (للانتقال لتبويب الطلبات الجارية)
   final VoidCallback? onAccepted;
 
   const TechnicianRequestsPage({
@@ -1630,18 +1637,7 @@ class TechnicianRequestsPage extends StatefulWidget {
 }
 
 class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
-  static const categories = [
-    'الكل',
-    'كهرباء',
-    'سباكة',
-    'تكييف',
-    'نجارة',
-    'أجهزة منزلية',
-    'نقاشة',
-    'تنظيف',
-    'نقل أثاث',
-    'خدمات أخرى',
-  ];
+  static const categories = AppServices.technicianCategories;
 
   bool get _showAvailable => widget.showAvailable;
   String _selectedCategory = 'الكل';
@@ -1651,6 +1647,7 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   String? _advancingId;
   List<Map<String, dynamic>> _rows = [];
   RealtimeChannel? _techChannel;
+  Timer? _realtimeDebounce;
 
   SupabaseClient get _supabase => Supabase.instance.client;
   String? get _uid => _supabase.auth.currentUser?.id;
@@ -1664,8 +1661,16 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
 
   @override
   void dispose() {
+    _realtimeDebounce?.cancel();
     _techChannel?.unsubscribe();
     super.dispose();
+  }
+
+  void _scheduleReload() {
+    _realtimeDebounce?.cancel();
+    _realtimeDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _load(silent: true);
+    });
   }
 
   void _listenRealtime() {
@@ -1675,18 +1680,18 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'service_requests',
-          callback: (payload) {
-            if (mounted) _load();
-          },
+          callback: (_) => _scheduleReload(),
         )
         .subscribe();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final data = await _supabase
           .from('service_requests')
@@ -1697,6 +1702,7 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
         _rows = (data as List)
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
+        _error = null;
         _loading = false;
       });
     } catch (e) {
@@ -1711,11 +1717,15 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   Future<void> reload() => _load();
 
   List<Map<String, dynamic>> get _available => _rows
-      .where((r) =>
-          r['status'] == 'pending' &&
-          r['technician_id'] == null &&
-          r['customer_id'] != _uid)
-      .toList();
+      .where((r) {
+        final rejected = (r['rejected_technician_ids'] as List? ?? [])
+            .map((id) => id.toString())
+            .toSet();
+        return r['status'] == 'pending' &&
+            r['technician_id'] == null &&
+            r['customer_id'] != _uid &&
+            !rejected.contains(_uid);
+      }).toList();
 
   List<Map<String, dynamic>> get _mine => _rows
       .where((r) =>
@@ -1742,19 +1752,27 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
   Future<void> _accept(String id) async {
     setState(() => _acceptingId = id);
     try {
-      await _supabase.rpc('accept_service_request', params: {'request_id': id});
+      final result = await _supabase.rpc(
+        'technician_accept_service_request',
+        params: {'p_request_id': id},
+      );
+      if (result is! Map || result['success'] != true) {
+        throw Exception(result is Map
+            ? result['message']?.toString() ?? 'تعذر قبول الطلب'
+            : 'تعذر قبول الطلب');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم قبول الطلب بنجاح')),
       );
-      await _load();
+      await _load(silent: true);
       if (mounted) widget.onAccepted?.call();
     } on PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message)),
       );
-      await _load();
+      await _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1765,12 +1783,57 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
     }
   }
 
+  Future<bool> _withdraw(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('إلغاء قبول الطلب'),
+        content: const Text('هل تريد التراجع عن قبول هذا الطلب؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('رجوع'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('تأكيد'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    try {
+      final result = await _supabase.rpc(
+        'technician_withdraw_service_request',
+        params: {'p_request_id': id},
+      );
+      if (result is! Map || result['success'] != true) {
+        throw Exception(result is Map
+            ? result['message']?.toString() ?? 'تعذر إلغاء القبول'
+            : 'تعذر إلغاء القبول');
+      }
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إلغاء قبولك للطلب')),
+      );
+      await _load(silent: true);
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إلغاء القبول: $e')),
+      );
+      return false;
+    }
+  }
+
   Future<void> _advanceStatus(String id) async {
     final isFinishing = _rows.any(
         (r) => r['id'].toString() == id && r['status'] == 'in_progress');
     setState(() => _advancingId = id);
     try {
-      final res = await _supabase.rpc('advance_request_status', params: {'p_request_id': id});
+      final res = await _supabase
+          .rpc('advance_request_status', params: {'p_request_id': id});
       if (!mounted) return;
       if (res is Map && res['success'] == true) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1780,9 +1843,10 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
                 : 'تم الانتقال للمرحلة التالية بنجاح'),
           ),
         );
-        await _load();
+        await _load(silent: true);
       } else {
-        throw Exception(res?['message'] ?? 'تعذر تحديث الحالة');
+        throw Exception(
+            res is Map ? (res['message'] ?? 'تعذر تحديث الحالة') : 'تعذر تحديث الحالة');
       }
     } catch (e) {
       if (!mounted) return;
@@ -1794,7 +1858,6 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
     }
   }
 
-  // فتح صفحة تفاصيل الطلب (عرض فقط بدون تعديل)
   void _openDetails(Map<String, dynamic> r) {
     Navigator.push(
       context,
@@ -1802,6 +1865,14 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
         builder: (_) => RequestDetailsPage(
           request: _maintenanceRequestFromRow(r),
           forTechnician: true,
+          onWithdraw: ['accepted', 'on_the_way'].contains(r['status'])
+              ? () async {
+                  final done = await _withdraw(r['id'].toString());
+                  if (done && mounted && Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                }
+              : null,
         ),
       ),
     );
@@ -1850,14 +1921,15 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
                       height: 4,
                       color: i == 0
                           ? Colors.transparent
-                          : (done ? const Color(0xFF1769E0) : Colors.grey.shade300),
+                          : (done
+                              ? const Color(0xFF1769E0)
+                              : Colors.grey.shade300),
                     ),
                   ),
                   CircleAvatar(
                     radius: 11,
-                    backgroundColor: done
-                        ? const Color(0xFF1769E0)
-                        : Colors.grey.shade300,
+                    backgroundColor:
+                        done ? const Color(0xFF1769E0) : Colors.grey.shade300,
                     child: Icon(
                       done ? Icons.check : Icons.circle,
                       size: 12,
@@ -1927,7 +1999,8 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
             Expanded(
               child: Text(
                 r['service_type']?.toString() ?? '',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
               ),
             ),
             Text(
@@ -1988,7 +2061,8 @@ class _TechnicianRequestsPageState extends State<TechnicianRequestsPage> {
               width: double.infinity,
               height: 46,
               child: ElevatedButton.icon(
-                onPressed: _advancingId != null ? null : () => _advanceStatus(id),
+                onPressed:
+                    _advancingId != null ? null : () => _advanceStatus(id),
                 icon: advancing
                     ? const SizedBox(
                         width: 18,
@@ -2153,6 +2227,7 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
   List<MaintenanceRequest> requests = [];
   StreamSubscription<AuthState>? _authSub;
   RealtimeChannel? _requestsChannel;
+  Timer? _realtimeDebounce;
 
   @override
   void initState() {
@@ -2172,8 +2247,11 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'service_requests',
-          callback: (payload) {
-            if (mounted) loadRequests();
+          callback: (_) {
+            _realtimeDebounce?.cancel();
+            _realtimeDebounce = Timer(const Duration(milliseconds: 350), () {
+              if (mounted) loadRequests(silent: true);
+            });
           },
         )
         .subscribe();
@@ -2181,38 +2259,22 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
 
   @override
   void dispose() {
+    _realtimeDebounce?.cancel();
     _requestsChannel?.unsubscribe();
     _authSub?.cancel();
     super.dispose();
   }
 
-  String translateStatus(String? status) {
-    switch (status) {
-      case 'pending':
-        return 'بانتظار قبول فني';
-      case 'accepted':
-        return 'تم قبول الطلب';
-      case 'on_the_way':
-        return 'الفني في الطريق';
-      case 'in_progress':
-        return 'جاري التنفيذ';
-      case 'completed':
-        return 'مكتمل';
-      case 'cancelled':
-        return 'ملغي';
-      default:
-        return status ?? 'بانتظار قبول فني';
-    }
-  }
-
-  Future<void> loadRequests() async {
+  Future<void> loadRequests({bool silent = false}) async {
     if (!mounted) return;
 
-    setState(() {
-      isLoading = true;
-      needsLogin = false;
-      errorMessage = null;
-    });
+    if (!silent) {
+      setState(() {
+        isLoading = true;
+        needsLogin = false;
+        errorMessage = null;
+      });
+    }
 
     try {
       final supabase = Supabase.instance.client;
@@ -2233,44 +2295,18 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
           .eq('customer_id', user.id)
           .order('created_at', ascending: false);
 
-      final loadedRequests = (data as List).map((item) {
-        final row = Map<String, dynamic>.from(item);
-
-        final requestId = row['id'].toString();
-        final visitAt = row['visit_at'];
-
-        final imageUrls = row['image_urls'] as List? ?? [];
-
-        final createdAt = DateTime.tryParse(
-              row['created_at']?.toString() ?? '',
-            ) ??
-            DateTime.now();
-
-        final visitDateTime = visitAt == null
-            ? null
-            : DateTime.tryParse(visitAt.toString())?.toLocal();
-
-        return MaintenanceRequest(
-          id: requestId,
-          number: 'SY-${requestId.substring(0, 8).toUpperCase()}',
-          service: row['service_type']?.toString() ?? '',
-          description: row['description']?.toString() ?? '',
-          address: row['address']?.toString() ?? '',
-          visitType: visitAt == null ? 'emergency' : 'scheduled',
-          visitDateTime: visitDateTime,
-          imagesCount: imageUrls.length,
-          imageUrls: imageUrls.map((e) => e.toString()).toList(),
-          createdAt: createdAt.toLocal(),
-          latitude: (row['latitude'] as num?)?.toDouble(),
-          longitude: (row['longitude'] as num?)?.toDouble(),
-          status: translateStatus(row['status']?.toString()),
-        );
-      }).toList();
+      final loadedRequests = (data as List)
+          .map((item) => _maintenanceRequestFromRow(
+                Map<String, dynamic>.from(item as Map),
+              ))
+          .toList();
 
       if (!mounted) return;
 
       setState(() {
         requests = loadedRequests;
+        errorMessage = null;
+        needsLogin = false;
         isLoading = false;
       });
     } catch (error) {
@@ -2378,6 +2414,52 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذر إلغاء الطلب: $e')),
       );
+    }
+  }
+
+  Future<bool> rejectTechnician(MaintenanceRequest request) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('إلغاء اختيار الفني'),
+        content: const Text(
+          'هل تريد إلغاء اختيار الفني؟ سيعود الطلب متاحًا لفنيين آخرين، ولن يستطيع هذا الفني قبوله مرة أخرى.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('رجوع'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('تأكيد الإلغاء'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'customer_reject_technician',
+        params: {'p_request_id': request.id},
+      );
+      if (result is! Map || result['success'] != true) {
+        throw Exception(result is Map
+            ? result['message']?.toString() ?? 'تعذر إلغاء اختيار الفني'
+            : 'تعذر إلغاء اختيار الفني');
+      }
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إلغاء اختيار الفني')),
+      );
+      await loadRequests();
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إلغاء اختيار الفني: $e')),
+      );
+      return false;
     }
   }
 
@@ -2574,6 +2656,20 @@ class _MyRequestsPageState extends State<MyRequestsPage> {
                               onCancel: canCustomerManage(request)
                                   ? () => cancelRequest(request)
                                   : null,
+                              onRejectTechnician: [
+                                'تم قبول الطلب',
+                                'الفني في الطريق',
+                              ].contains(request.status)
+                                  ? () async {
+                                      final done =
+                                          await rejectTechnician(request);
+                                      if (done &&
+                                          mounted &&
+                                          Navigator.canPop(context)) {
+                                        Navigator.pop(context);
+                                      }
+                                    }
+                                  : null,
                             ),
                           ),
                         ).then((_) => loadRequests());
@@ -2674,7 +2770,6 @@ String _formatDateTime(DateTime? dateTime) {
   return '$date - $hour:$minute';
 }
 
-// تحويل صف من جدول service_requests إلى كائن MaintenanceRequest
 MaintenanceRequest _maintenanceRequestFromRow(Map<String, dynamic> row) {
   final requestId = row['id'].toString();
   final visitAt = row['visit_at'];
@@ -2706,8 +2801,8 @@ class RequestDetailsPage extends StatefulWidget {
   final MaintenanceRequest request;
   final VoidCallback? onEdit;
   final VoidCallback? onCancel;
-
-  // عرض الفني: بدون تعديل أو إلغاء، وبدون الملاحظة الموجهة للعميل
+  final VoidCallback? onRejectTechnician;
+  final VoidCallback? onWithdraw;
   final bool forTechnician;
 
   const RequestDetailsPage({
@@ -2715,6 +2810,8 @@ class RequestDetailsPage extends StatefulWidget {
     required this.request,
     this.onEdit,
     this.onCancel,
+    this.onRejectTechnician,
+    this.onWithdraw,
     this.forTechnician = false,
   });
 
@@ -2726,12 +2823,16 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
   late String currentStatus;
   RealtimeChannel? _channel;
   late final Future<List<String>> _imagesFuture;
+  String? _customerPhone;
+  String? _technicianPhone;
+  bool _contactsLoading = false;
 
   @override
   void initState() {
     super.initState();
     currentStatus = widget.request.status;
     _imagesFuture = _loadImageUrls();
+    _loadContactNumbers();
     _listenRealtime();
   }
 
@@ -2739,6 +2840,25 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
   void dispose() {
     _channel?.unsubscribe();
     super.dispose();
+  }
+
+  Future<void> _loadContactNumbers() async {
+    setState(() => _contactsLoading = true);
+    try {
+      final row = await Supabase.instance.client
+          .from('service_requests')
+          .select('customer_phone, technician_phone')
+          .eq('id', widget.request.id)
+          .maybeSingle();
+      if (!mounted || row == null) return;
+      setState(() {
+        _customerPhone = row['customer_phone']?.toString();
+        _technicianPhone = row['technician_phone']?.toString();
+        _contactsLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _contactsLoading = false);
+    }
   }
 
   void _listenRealtime() {
@@ -2758,35 +2878,12 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
             if (!mounted) return;
             setState(() {
               final newDbStatus = payload.newRecord['status']?.toString();
-              currentStatus = _translateStatus(newDbStatus);
+              currentStatus = _arabicRequestStatus(newDbStatus);
             });
           },
         )
         .subscribe();
   }
-
-  String _translateStatus(String? status) {
-    switch (status) {
-      case 'pending':
-        return 'بانتظار قبول فني';
-      case 'accepted':
-        return 'تم قبول الطلب';
-      case 'on_the_way':
-        return 'الفني في الطريق';
-      case 'in_progress':
-        return 'جاري التنفيذ';
-      case 'completed':
-        return 'مكتمل';
-      case 'cancelled':
-        return 'ملغي';
-      default:
-        return status ?? 'بانتظار قبول فني';
-    }
-  }
-
-  // ---------------------------------------------------------------
-  // ألوان وأيقونات
-  // ---------------------------------------------------------------
 
   bool get _tech => widget.forTechnician;
 
@@ -2854,10 +2951,6 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     return Icons.home_repair_service_rounded;
   }
 
-  // ---------------------------------------------------------------
-  // الصور (روابط موقّعة لأن الـ bucket خاص)
-  // ---------------------------------------------------------------
-
   Future<List<String>> _loadImageUrls() async {
     final paths = widget.request.imageUrls;
     if (paths.isEmpty) return [];
@@ -2866,9 +2959,7 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     for (final path in paths) {
       try {
         urls.add(await storage.createSignedUrl(path, 3600));
-      } catch (_) {
-        // نتجاهل الصورة التي تعذر تحميلها
-      }
+      } catch (_) {}
     }
     return urls;
   }
@@ -2918,10 +3009,6 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
       SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
     );
   }
-
-  // ---------------------------------------------------------------
-  // مكونات الواجهة
-  // ---------------------------------------------------------------
 
   Widget _decorCircle(double size, double alpha) {
     return Container(
@@ -3013,8 +3100,7 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
                           const SizedBox(height: 8),
                           InkWell(
                             borderRadius: BorderRadius.circular(12),
-                            onTap: () =>
-                                _copy(r.number, 'تم نسخ رقم الطلب'),
+                            onTap: () => _copy(r.number, 'تم نسخ رقم الطلب'),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 4),
@@ -3311,6 +3397,49 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     );
   }
 
+  Widget _phoneTile(String label, String? phone) {
+    final value = phone?.trim() ?? '';
+    if (value.isEmpty) return const SizedBox.shrink();
+    return _infoTile(
+      icon: Icons.phone_rounded,
+      color: const Color(0xFF0D9488),
+      label: label,
+      value: value,
+      trailing: IconButton(
+        tooltip: 'نسخ الرقم',
+        onPressed: () => _copy(value, 'تم نسخ رقم التليفون'),
+        icon: const Icon(Icons.copy_rounded),
+      ),
+    );
+  }
+
+  Widget _contactCard() {
+    final contactAvailable = [
+      'تم قبول الطلب',
+      'الفني في الطريق',
+      'جاري التنفيذ',
+      'مكتمل',
+    ].contains(currentStatus);
+    if (!contactAvailable) return const SizedBox.shrink();
+    final phone = _tech ? _customerPhone : _technicianPhone;
+    final label = _tech ? 'رقم العميل' : 'رقم الفني';
+    if (_contactsLoading && phone == null) {
+      return _sectionCard(
+        title: 'بيانات التواصل',
+        icon: Icons.contact_phone_outlined,
+        child: const LinearProgressIndicator(),
+      );
+    }
+    if (phone == null || phone.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return _sectionCard(
+      title: 'بيانات التواصل',
+      icon: Icons.contact_phone_outlined,
+      child: _phoneTile(label, phone),
+    );
+  }
+
   Widget _detailsCard() {
     final r = widget.request;
     final emergency = r.visitType == 'emergency';
@@ -3333,9 +3462,8 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
             icon: Icons.schedule_rounded,
             color: const Color(0xFF0D9488),
             label: 'موعد الزيارة',
-            value: emergency
-                ? 'في أقرب وقت'
-                : _formatDateTime(r.visitDateTime),
+            value:
+                emergency ? 'في أقرب وقت' : _formatDateTime(r.visitDateTime),
           ),
           const SizedBox(height: 10),
           _infoTile(
@@ -3356,8 +3484,9 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
             icon: Icons.description_outlined,
             color: const Color(0xFF7C3AED),
             label: 'وصف المشكلة',
-            value:
-                r.description.trim().isEmpty ? 'لا يوجد وصف إضافي' : r.description,
+            value: r.description.trim().isEmpty
+                ? 'لا يوجد وصف إضافي'
+                : r.description,
           ),
           const SizedBox(height: 10),
           _infoTile(
@@ -3534,6 +3663,28 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     );
   }
 
+  Widget _selectionAction() {
+    final callback = _tech ? widget.onWithdraw : widget.onRejectTechnician;
+    if (callback == null) return const SizedBox.shrink();
+    final label = _tech ? 'إلغاء قبولي للطلب' : 'إلغاء اختيار الفني';
+    return SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: OutlinedButton.icon(
+        onPressed: callback,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.red,
+          side: const BorderSide(color: Colors.red),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        icon: const Icon(Icons.person_remove_alt_1_rounded),
+        label: Text(label),
+      ),
+    );
+  }
+
   Widget _customerNote() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -3566,7 +3717,6 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
     final r = widget.request;
     final waiting = currentStatus == 'بانتظار قبول فني';
     final showProgress = !waiting && currentStatus != 'ملغي';
-    // الفني لا يرى موقع الخريطة الدقيق قبل قبول الطلب
     final showMap =
         r.latitude != null && r.longitude != null && !(_tech && waiting);
 
@@ -3597,6 +3747,8 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
                   if (showProgress) _progressCard() else _stateBanner(),
                   const SizedBox(height: 16),
                   _detailsCard(),
+                  const SizedBox(height: 16),
+                  _contactCard(),
                   if (r.imagesCount > 0) ...[
                     const SizedBox(height: 16),
                     _imagesCard(),
@@ -3608,6 +3760,11 @@ class _RequestDetailsPageState extends State<RequestDetailsPage> {
                   if (widget.onEdit != null || widget.onCancel != null) ...[
                     const SizedBox(height: 16),
                     _actions(),
+                  ],
+                  if (widget.onWithdraw != null ||
+                      widget.onRejectTechnician != null) ...[
+                    const SizedBox(height: 12),
+                    _selectionAction(),
                   ],
                   if (!_tech) ...[
                     const SizedBox(height: 16),
@@ -3652,16 +3809,21 @@ class _AccountPageState extends State<AccountPage> {
   int _completed = 0;
   Map<String, dynamic>? _techProfile;
   List<String> _techServices = [];
+  String? _overrideName;
 
   SupabaseClient get _supabase => Supabase.instance.client;
   User? get _user => _supabase.auth.currentUser;
   bool get _isLoggedIn => _user != null;
-  bool get _isTechnician =>
-      _user?.userMetadata?['account_type'] == 'technician';
+  bool get _isTechnician {
+    final user = _user;
+    return user != null && AuthService.accountTypeOf(user) == 'technician';
+  }
 
   String get _displayName {
-    final name = _user?.userMetadata?['full_name']?.toString().trim();
-    if (name == null || name.isEmpty) {
+    final name =
+        (_overrideName ?? _user?.userMetadata?['full_name']?.toString() ?? '')
+            .trim();
+    if (name.isEmpty) {
       return _isTechnician ? 'فني صيانتي' : 'عميل صيانتي';
     }
     return name;
@@ -3682,6 +3844,9 @@ class _AccountPageState extends State<AccountPage> {
     _loadProfileData();
     _authSub = _supabase.auth.onAuthStateChange.listen((data) {
       if (!mounted) return;
+      if (data.event == AuthChangeEvent.signedOut) {
+        _overrideName = null;
+      }
       setState(() {});
       if (data.event == AuthChangeEvent.signedIn ||
           data.event == AuthChangeEvent.signedOut ||
@@ -3707,6 +3872,7 @@ class _AccountPageState extends State<AccountPage> {
         _completed = 0;
         _techProfile = null;
         _techServices = [];
+        _overrideName = null;
         _loadingData = false;
       });
       return;
@@ -3752,9 +3918,14 @@ class _AccountPageState extends State<AccountPage> {
         _total = statuses.length;
         _completed = statuses.where((e) => e == 'completed').length;
         _active = statuses
-            .where((e) => (_isTechnician
-                ? const ['accepted', 'on_the_way', 'in_progress']
-                : const ['pending', 'accepted', 'on_the_way', 'in_progress'])
+            .where((e) => (isTech
+                    ? const ['accepted', 'on_the_way', 'in_progress']
+                    : const [
+                        'pending',
+                        'accepted',
+                        'on_the_way',
+                        'in_progress'
+                      ])
                 .contains(e))
             .length;
         _techProfile = profile;
@@ -3788,7 +3959,7 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _editName() async {
-    final current = _user?.userMetadata?['full_name']?.toString().trim() ?? '';
+    final current = _displayName;
     final controller = TextEditingController(text: current);
 
     final newName = await showDialog<String>(
@@ -3836,6 +4007,7 @@ class _AccountPageState extends State<AccountPage> {
         UserAttributes(data: {'full_name': newName}),
       );
       if (!mounted) return;
+      setState(() => _overrideName = newName);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم تحديث الاسم')),
       );
@@ -3877,7 +4049,7 @@ class _AccountPageState extends State<AccountPage> {
 
   Future<void> _logout() async {
     try {
-      await _supabase.auth.signOut();
+      await AuthService.signOut();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم تسجيل الخروج بنجاح')),
@@ -3998,6 +4170,9 @@ class _AccountPageState extends State<AccountPage> {
 
   Widget _headerCard() {
     final name = _displayName;
+    final avatarUrl = _user?.userMetadata?['avatar_url'];
+    final hasAvatar = avatarUrl is String && avatarUrl.isNotEmpty;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 20, 10, 20),
       decoration: BoxDecoration(
@@ -4023,15 +4198,8 @@ class _AccountPageState extends State<AccountPage> {
               CircleAvatar(
                 radius: 36,
                 backgroundColor: Colors.white,
-                backgroundImage: (_user?.userMetadata?['avatar_url']
-                            is String &&
-                        (_user!.userMetadata!['avatar_url'] as String)
-                            .isNotEmpty)
-                    ? NetworkImage(_user!.userMetadata!['avatar_url'] as String)
-                    : null,
-                child: (_user?.userMetadata?['avatar_url'] is String &&
-                        (_user!.userMetadata!['avatar_url'] as String)
-                            .isNotEmpty)
+                backgroundImage: hasAvatar ? NetworkImage(avatarUrl) : null,
+                child: hasAvatar
                     ? null
                     : Text(
                         name.isEmpty
@@ -4332,7 +4500,6 @@ class _AccountPageState extends State<AccountPage> {
     );
   }
 
-  // زر تسجيل الخروج: أيقونة فقط أعلى يسار الصفحة
   Widget _logoutButton() {
     return Align(
       alignment: Alignment.centerLeft,
@@ -4523,42 +4690,6 @@ class _AccountPageState extends State<AccountPage> {
   }
 }
 
-class SimpleSectionPage extends StatelessWidget {
-  final String title;
-  final String message;
-  final IconData icon;
-
-  const SimpleSectionPage({
-    super.key,
-    required this.title,
-    required this.message,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 64, color: const Color(0xFF1769E0)),
-            const SizedBox(height: 14),
-            Text(title,
-                style:
-                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class RequestPage extends StatefulWidget {
   final String? initialService;
   final MaintenanceRequest? editRequest;
@@ -4573,35 +4704,7 @@ class _RequestPageState extends State<RequestPage> {
   final descriptionController = TextEditingController();
   final addressController = TextEditingController();
 
-  final List<String> services = [
-    'كهرباء',
-    'سباكة',
-    'تكييف',
-    'نجارة',
-    'نقاشة',
-    'أجهزة منزلية',
-    'غسالات',
-    'ثلاجات',
-    'ديب فريزر',
-    'تكييفات',
-    'شاشات وتليفزيونات',
-    'بوتاجازات وأفران',
-    'سخانات كهرباء وغاز',
-    'ميكروويف',
-    'غسالات أطباق',
-    'كولدير ومبرد مياه',
-    'خلاطات',
-    'مراوح',
-    'مكانس كهربائية',
-    'تنظيف',
-    'مكافحة حشرات',
-    'تعقيم',
-    'نقل أثاث',
-    'فك وتركيب أثاث',
-    'تركيب',
-    'تركيب أجهزة ومعدات',
-    'خدمات أخرى',
-  ];
+  final List<String> services = List<String>.from(AppServices.allServices);
 
   String? selectedService;
   String visitType = 'scheduled';
@@ -4619,6 +4722,7 @@ class _RequestPageState extends State<RequestPage> {
   final ImagePicker imagePicker = ImagePicker();
   final List<XFile> selectedImages = [];
   final List<String> existingImagePaths = [];
+  final List<String> removedImagePaths = [];
   final Map<String, String> existingImageSignedUrls = {};
 
   bool get isEditMode => widget.editRequest != null;
@@ -4661,7 +4765,8 @@ class _RequestPageState extends State<RequestPage> {
       }
 
       if (permission == LocationPermission.deniedForever) {
-        throw Exception('يرجى السماح للموقع من إعدادات المتصفح');
+        throw Exception(
+            'يرجى السماح بصلاحية الموقع من إعدادات الجهاز أو المتصفح');
       }
 
       Position position = await Geolocator.getCurrentPosition(
@@ -4691,10 +4796,10 @@ class _RequestPageState extends State<RequestPage> {
       );
     } catch (error) {
       if (!mounted) return;
-
+      final msg = error.toString().replaceFirst('Exception: ', '');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('تعذر تحديد الموقع: $error'),
+          content: Text('تعذر تحديد الموقع: $msg'),
         ),
       );
     } finally {
@@ -4704,6 +4809,14 @@ class _RequestPageState extends State<RequestPage> {
         });
       }
     }
+  }
+
+  Future<void> _cleanupUploadedImages(
+      SupabaseClient supabase, List<String> paths) async {
+    if (paths.isEmpty) return;
+    try {
+      await supabase.storage.from('service-images').remove(paths);
+    } catch (_) {}
   }
 
   Future<void> addImage(ImageSource source) async {
@@ -4907,7 +5020,7 @@ class _RequestPageState extends State<RequestPage> {
       return;
     }
 
-    if (user.userMetadata?['account_type'] != 'customer') {
+    if (AuthService.accountTypeOf(user) != 'customer') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('يجب تسجيل الدخول بحساب عميل لإرسال الطلب'),
@@ -4931,14 +5044,17 @@ class _RequestPageState extends State<RequestPage> {
         final extension = image.name.contains('.')
             ? image.name.split('.').last.toLowerCase()
             : 'jpg';
+        final safeExtension = ['jpg', 'jpeg', 'png', 'webp'].contains(extension)
+            ? extension
+            : 'jpg';
         final fileName =
-            '${DateTime.now().microsecondsSinceEpoch}_$i.$extension';
+            '${DateTime.now().microsecondsSinceEpoch}_$i.$safeExtension';
         final imagePath = '${user.id}/$fileName';
 
         String contentType = 'image/jpeg';
-        if (extension == 'png') {
+        if (safeExtension == 'png') {
           contentType = 'image/png';
-        } else if (extension == 'webp') {
+        } else if (safeExtension == 'webp') {
           contentType = 'image/webp';
         }
 
@@ -4979,9 +5095,15 @@ class _RequestPageState extends State<RequestPage> {
               ? result['message']?.toString() ?? 'تعذر تعديل الطلب'
               : 'تعذر تعديل الطلب');
         }
+
+        if (removedImagePaths.isNotEmpty) {
+          await _cleanupUploadedImages(supabase, removedImagePaths);
+        }
       } else {
         final requestData = {
           'customer_id': user.id,
+          'customer_phone': user.phone ??
+              user.userMetadata?['phone']?.toString(),
           'service_type': selectedService!,
           'description': descriptionController.text.trim(),
           'address': addressController.text.trim(),
@@ -5002,7 +5124,6 @@ class _RequestPageState extends State<RequestPage> {
 
       if (!mounted) return;
 
-      // طلب جديد: الانتقال فورًا لصفحة تفاصيل الطلب + رسالة أسفل الشاشة 3 ثوانٍ
       final created = createdRequest;
       if (!isEditMode && created != null) {
         final messenger = ScaffoldMessenger.of(context);
@@ -5035,7 +5156,8 @@ class _RequestPageState extends State<RequestPage> {
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
-          title: Text(isEditMode ? 'تم تعديل طلبك بنجاح' : 'تم إرسال طلبك بنجاح'),
+          title: Text(
+              isEditMode ? 'تم تعديل طلبك بنجاح' : 'تم إرسال طلبك بنجاح'),
           content: Text(
             '${isEditMode ? 'تم تحديث بيانات طلب الصيانة بنجاح.' : 'تم تسجيل طلب الصيانة في النظام بنجاح.'}\n\n'
             '$visitDetails\n\n'
@@ -5053,6 +5175,8 @@ class _RequestPageState extends State<RequestPage> {
         ),
       );
     } catch (error) {
+      await _cleanupUploadedImages(supabase, uploadedPaths);
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -5153,67 +5277,65 @@ class _RequestPageState extends State<RequestPage> {
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 10),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: visitType == 'scheduled'
-                        ? const Color(0xFF1769E0)
-                        : const Color(0xFFD8E0EC),
-                    width: visitType == 'scheduled' ? 1.5 : 1,
-                  ),
-                ),
-                child: RadioListTile<String>(
-                  value: 'scheduled',
-                  groupValue: visitType,
-                  activeColor: const Color(0xFF1769E0),
-                  title: const Text(
-                    'تحديد موعد زيارة',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: const Text(
-                    'اختار اليوم والساعة المناسبة لزيارة الفني',
-                  ),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        visitType = value;
-                      });
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: visitType == 'emergency'
-                        ? Colors.red
-                        : const Color(0xFFD8E0EC),
-                    width: visitType == 'emergency' ? 1.5 : 1,
-                  ),
-                ),
-                child: RadioListTile<String>(
-                  value: 'emergency',
-                  groupValue: visitType,
-                  activeColor: Colors.red,
-                  title: const Text(
-                    'زيارة طارئة الآن',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: const Text(
-                    'إرسال طلب فوري للبحث عن فني متاح',
-                  ),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        visitType = value;
-                      });
-                    }
-                  },
+              RadioGroup<String>(
+                groupValue: visitType,
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() {
+                      visitType = value;
+                    });
+                  }
+                },
+                child: Column(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: visitType == 'scheduled'
+                              ? const Color(0xFF1769E0)
+                              : const Color(0xFFD8E0EC),
+                          width: visitType == 'scheduled' ? 1.5 : 1,
+                        ),
+                      ),
+                      child: const RadioListTile<String>(
+                        value: 'scheduled',
+                        activeColor: Color(0xFF1769E0),
+                        title: Text(
+                          'تحديد موعد زيارة',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          'اختار اليوم والساعة المناسبة لزيارة الفني',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: visitType == 'emergency'
+                              ? Colors.red
+                              : const Color(0xFFD8E0EC),
+                          width: visitType == 'emergency' ? 1.5 : 1,
+                        ),
+                      ),
+                      child: const RadioListTile<String>(
+                        value: 'emergency',
+                        activeColor: Colors.red,
+                        title: Text(
+                          'زيارة طارئة الآن',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          'إرسال طلب فوري للبحث عن فني متاح',
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               if (visitType == 'scheduled') ...[
@@ -5332,9 +5454,12 @@ class _RequestPageState extends State<RequestPage> {
                             child: IconButton(
                               onPressed: isSubmitting
                                   ? null
-                                  : () => setState(
-                                        () => existingImagePaths.remove(path),
-                                      ),
+                                  : () => setState(() {
+                                        existingImagePaths.remove(path);
+                                        if (!removedImagePaths.contains(path)) {
+                                          removedImagePaths.add(path);
+                                        }
+                                      }),
                               icon: const Icon(Icons.close),
                               style: IconButton.styleFrom(
                                 backgroundColor: Colors.white,
@@ -5539,7 +5664,7 @@ class _RequestPageState extends State<RequestPage> {
                               heroTag: 'home_map',
                               onPressed: () {
                                 mapController.move(
-                                  latlong.LatLng(31.0409, 31.3785),
+                                  const latlong.LatLng(31.0409, 31.3785),
                                   13,
                                 );
                               },
@@ -5591,7 +5716,7 @@ class _RequestPageState extends State<RequestPage> {
                     ),
                   ),
                   child: isSubmitting
-                      ? Row(
+                      ? const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             SizedBox(
@@ -5603,9 +5728,7 @@ class _RequestPageState extends State<RequestPage> {
                               ),
                             ),
                             SizedBox(width: 12),
-                            Text(isEditMode
-                                ? 'جاري حفظ التعديلات...'
-                                : 'جاري إرسال الطلب...'),
+                            Text('جاري حفظ البيانات...'),
                           ],
                         )
                       : Text(

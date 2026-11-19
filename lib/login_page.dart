@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'technician_application_page.dart';
+import 'auth_service.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -21,61 +21,43 @@ class _LoginPageState extends State<LoginPage> {
     final supabase = Supabase.instance.client;
 
     try {
-      final GoogleSignIn googleSignIn = GoogleSignIn(serverClientId: '171719716098-nb5akmdb4b3oomge06p061eq80qmvo2k.apps.googleusercontent.com');
-      final googleUser = await googleSignIn.signIn();
+      final payload = await AuthService.signInWithGoogle();
+      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
 
-      if (googleUser == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
+      final user = payload.authResponse.user!;
 
-      final googleAuth = await googleUser.authentication;
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
-      if (accessToken == null || idToken == null) {
-        throw Exception('فشل في جلب بيانات المصادقة من جوجل');
-      }
-
-      final response = await supabase.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
-
-      final user = response.user;
-      if (user == null) {
-        throw Exception('تعذر الحصول على بيانات الحساب');
-      }
-
-      // التأكد أن الحساب مسجل كفني
-      if (user.userMetadata?['account_type'] != 'technician') {
-        await supabase.auth.signOut();
-        throw Exception('هذا الحساب ليس حساب فني مسجل');
-      }
-
-      // التأكد من وجود ملف الفني واعتماده من الإدارة
+      // طلب الانضمام (إن وُجد) — يُجلب مرة واحدة ويُستخدم أدناه
       final profile = await supabase
           .from('technician_profiles')
-          .select('is_approved')
+          .select('is_approved, application_status')
           .eq('user_id', user.id)
           .maybeSingle();
 
-      if (profile == null) {
-        await supabase.auth.signOut();
-        throw Exception('لم يتم العثور على طلب انضمام الفني الخاص بك');
+      var accountType = AuthService.accountTypeOf(user);
+
+      // إصلاح تلقائي: الطلب محفوظ لكن نوع الحساب لم يُثبَّت (فشل سابق في الخطوة الأخيرة)
+      if (accountType == null && profile != null) {
+        accountType = await AuthService.claimTechnicianAccount();
       }
 
-      if (profile['is_approved'] != true) {
-        await supabase.auth.signOut();
-        throw Exception('حسابك لم يتم اعتماده من الإدارة حتى الآن');
+      if (accountType != 'technician') {
+        await AuthService.signOut();
+        throw Exception('هذا الحساب ليس حساب فني مسجل');
+      }
+
+      if (profile == null) {
+        await AuthService.signOut();
+        throw Exception('لم يتم العثور على طلب انضمام الفني الخاص بك');
       }
 
       if (!mounted) return;
 
+      final isApproved = profile['is_approved'] == true;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم تسجيل الدخول بنجاح'),
+        SnackBar(
+          content: Text(isApproved
+              ? 'تم تسجيل الدخول بنجاح'
+              : 'تم تسجيل الدخول — حسابك قيد مراجعة الإدارة'),
           backgroundColor: _primaryColor,
         ),
       );
@@ -83,10 +65,9 @@ class _LoginPageState extends State<LoginPage> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (error) {
       if (!mounted) return;
-      final message = error.toString().replaceFirst('Exception: ', '');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
+          content: Text(AuthService.friendlyError(error)),
           backgroundColor: Colors.red.shade700,
         ),
       );
@@ -162,13 +143,12 @@ class _LoginPageState extends State<LoginPage> {
                       style: TextStyle(color: Colors.black54, fontSize: 14),
                     ),
                     const SizedBox(height: 40),
-
-                    // زر جوجل للفنيين
                     SizedBox(
                       height: 52,
                       child: ElevatedButton.icon(
                         onPressed: _isLoading ? null : _signInWithGoogle,
-                        icon: const Icon(Icons.g_mobiledata, size: 32, color: Colors.red),
+                        icon: const Icon(Icons.g_mobiledata,
+                            size: 32, color: Colors.red),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: Colors.black87,

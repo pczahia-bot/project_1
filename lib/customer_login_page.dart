@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-
+import 'auth_service.dart';
 import 'register_page.dart';
 
 class CustomerLoginPage extends StatefulWidget {
@@ -23,36 +21,20 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
     setState(() => _loading = true);
 
     try {
-      final GoogleSignIn googleSignIn = GoogleSignIn(serverClientId: '171719716098-nb5akmdb4b3oomge06p061eq80qmvo2k.apps.googleusercontent.com');
-      final googleUser = await googleSignIn.signIn();
-      
-      if (googleUser == null) {
-        setState(() => _loading = false);
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
-      if (accessToken == null || idToken == null) {
-        throw 'فشل في الحصول على بيانات المصادقة من جوجل.';
-      }
-
-      final response = await Supabase.instance.client.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
+      final payload = await AuthService.signInWithGoogle();
+      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
 
       if (!mounted) return;
 
-      final user = response.user;
-      final accountType = user?.userMetadata?['account_type'];
+      final user = payload.authResponse.user!;
+      var accountType = AuthService.accountTypeOf(user);
 
-      // إذا كان الحساب مسجلاً مسبقاً كفني ولا يملكه العميل
-      if (accountType != null && accountType != 'customer') {
-        await Supabase.instance.client.auth.signOut();
+      // أول دخول: تثبيت نوع الحساب كعميل على الخادم
+      accountType ??=
+          await AuthService.claimCustomerAccount(fullName: payload.displayName);
+
+      if (accountType != 'customer') {
+        await AuthService.signOut();
         if (!mounted) return;
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -64,18 +46,7 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
         return;
       }
 
-      // إذا كان حساباً جديداً تماماً، نقوم بتحديث الـ Metadata ليكون عميلاً تلقائياً
-      if (accountType == null) {
-        await Supabase.instance.client.auth.updateUser(
-          UserAttributes(
-            data: {
-              'full_name': googleUser.displayName ?? 'عميل',
-              'account_type': 'customer',
-            },
-          ),
-        );
-      }
-
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('تم تسجيل الدخول بنجاح'),
@@ -85,10 +56,12 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
 
       Navigator.pop(context, true);
     } catch (e) {
+      await AuthService.signOut();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('حدث خطأ أثناء تسجيل الدخول: $e'),
+          content:
+              Text('حدث خطأ أثناء تسجيل الدخول: ${AuthService.friendlyError(e)}'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -161,13 +134,12 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
                     style: TextStyle(fontSize: 13, color: hintColor, height: 1.6),
                   ),
                   const SizedBox(height: 45),
-
-                  // زر تسجيل الدخول بجوجل
                   SizedBox(
                     height: 54,
                     child: ElevatedButton.icon(
                       onPressed: _loading ? null : _signInWithGoogle,
-                      icon: const Icon(Icons.g_mobiledata, size: 32, color: Colors.red),
+                      icon: const Icon(Icons.g_mobiledata,
+                          size: 32, color: Colors.red),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: textColor,

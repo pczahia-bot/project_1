@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'login_page.dart';
+import 'auth_service.dart';
+import 'models/app_services.dart';
 
 const Color technicianPrimaryColor = Color(0xFF176B65);
 
@@ -13,8 +14,7 @@ class TechnicianApplicationPage extends StatefulWidget {
       _TechnicianApplicationPageState();
 }
 
-class _TechnicianApplicationPageState
-    extends State<TechnicianApplicationPage> {
+class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
   final _formKey = GlobalKey<FormState>();
 
   final _phoneController = TextEditingController();
@@ -22,16 +22,7 @@ class _TechnicianApplicationPageState
   String _serviceArea = 'المنصورة';
   bool _isLoading = false;
 
-  final List<String> _services = [
-    'سباكة',
-    'كهرباء',
-    'نجارة',
-    'نقاشة',
-    'تكييف',
-    'أجهزة منزلية',
-    'تنظيف',
-    'صيانة عامة',
-  ];
+  final List<String> _services = AppServices.allServices;
 
   SupabaseClient get supabase => Supabase.instance.client;
 
@@ -54,6 +45,12 @@ class _TechnicianApplicationPageState
     );
   }
 
+  /// يقبل أرقام مصرية مثل 01012345678 أو +201012345678
+  bool _isValidPhone(String value) {
+    final cleaned = value.replaceAll(RegExp(r'[\s\-]'), '');
+    return RegExp(r'^(\+20|0020|0)?1[0125][0-9]{8}$').hasMatch(cleaned);
+  }
+
   Future<void> _submitApplicationWithGoogle() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -65,52 +62,23 @@ class _TechnicianApplicationPageState
     setState(() => _isLoading = true);
 
     try {
-      final GoogleSignIn googleSignIn = GoogleSignIn(serverClientId: '171719716098-nb5akmdb4b3oomge06p061eq80qmvo2k.apps.googleusercontent.com');
-      final googleUser = await googleSignIn.signIn();
-
-      if (googleUser == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
-      if (accessToken == null || idToken == null) {
-        throw 'فشل في جلب بيانات المصادقة من جوجل';
-      }
-
-      // 1. تسجيل الدخول عبر Google OAuth في Supabase
-      final response = await supabase.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
+      final payload = await AuthService.signInWithGoogle();
+      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
 
       if (!mounted) return;
 
-      final user = response.user;
-      if (user == null) {
-        throw 'فشل التعرف على المستخدم';
+      final user = payload.authResponse.user!;
+      final existingType = AuthService.accountTypeOf(user);
+
+      if (existingType == 'customer') {
+        await AuthService.signOut();
+        throw Exception(
+            'هذا البريد مسجل بالفعل كحساب عميل، يرجى استخدام بريد آخر للانضمام كفني.');
       }
 
-      final fullName = googleUser.displayName ?? 'فني صيانة';
+      final fullName = payload.displayName ?? 'فني صيانة';
 
-      // 2. تحديث الـ metadata ليكون الحساب فنياً
-      await supabase.auth.updateUser(
-        UserAttributes(
-          data: {
-            'full_name': fullName,
-            'account_type': 'technician',
-            'phone': _phoneController.text.trim(),
-            'service_area': _serviceArea,
-            'technician_services': _selectedServices.toList(),
-          },
-        ),
-      );
-
-      // 3. إرسال أو حفظ بيانات الطلب في قاعدة البيانات عبر RPC
+      // 1) حفظ طلب الانضمام في قاعدة البيانات
       await supabase.rpc(
         'submit_technician_application',
         params: {
@@ -121,21 +89,21 @@ class _TechnicianApplicationPageState
         },
       );
 
+      // 2) تثبيت نوع الحساب كفني على الخادم (غير قابل للتعديل من العميل)
+      await AuthService.claimTechnicianAccount();
+
       if (!mounted) return;
 
-      _showMessage('تم إرسال طلب الانضمام بنجاح، وسيتم مراجعته من الإدارة.');
-
-      // تسجيل الخروج لعدم السماح بالدخول حتى تتم الموافقة
-      await supabase.auth.signOut();
-      if (!mounted) return;
+      _showMessage(
+          'تم إرسال طلب الانضمام بنجاح، يمكنك متابعة حالة الطلب من حسابك.');
       Navigator.of(context).popUntil((route) => route.isFirst);
-    } on PostgrestException catch (e) {
-      if (mounted) {
-        _showMessage('تم إنشاء الحساب، لكن تعذر حفظ طلب الانضمام: ${e.message}');
-      }
     } catch (e) {
+      // أي فشل بعد تسجيل الدخول: نخرج المستخدم حتى لا تبقى جلسة بحالة ناقصة.
+      // لو كان الطلب محفوظًا فعلًا، فتسجيل الدخول كفني سيُكمل التثبيت تلقائيًا.
+      await AuthService.signOut();
       if (mounted) {
-        _showMessage('حدث خطأ أثناء إرسال الطلب: $e');
+        _showMessage(
+            'حدث خطأ أثناء إرسال الطلب: ${AuthService.friendlyError(e)}');
       }
     } finally {
       if (mounted) {
@@ -220,15 +188,14 @@ class _TechnicianApplicationPageState
                     style: TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 25),
-
-                  // رقم الهاتف
                   TextFormField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
                     textDirection: TextDirection.rtl,
                     decoration: InputDecoration(
                       labelText: 'رقم الهاتف للتواصل',
-                      prefixIcon: const Icon(Icons.phone_outlined, color: technicianPrimaryColor),
+                      prefixIcon: const Icon(Icons.phone_outlined,
+                          color: technicianPrimaryColor),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -237,17 +204,18 @@ class _TechnicianApplicationPageState
                       if (value == null || value.trim().isEmpty) {
                         return 'رقم الهاتف مطلوب';
                       }
+                      if (!_isValidPhone(value.trim())) {
+                        return 'أدخل رقم هاتف مصري صحيح';
+                      }
                       return null;
                     },
                   ),
                   const SizedBox(height: 20),
-
                   const Text(
                     'منطقة العمل',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
-
                   DropdownButtonFormField<String>(
                     initialValue: _serviceArea,
                     decoration: InputDecoration(
@@ -273,16 +241,15 @@ class _TechnicianApplicationPageState
                     },
                   ),
                   const SizedBox(height: 22),
-
                   _buildServicesSelector(),
                   const SizedBox(height: 28),
-
-                  // زر التسجيل والإرسال عبر جوجل
                   SizedBox(
                     height: 52,
                     child: ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _submitApplicationWithGoogle,
-                      icon: const Icon(Icons.g_mobiledata, size: 32, color: Colors.red),
+                      onPressed:
+                          _isLoading ? null : _submitApplicationWithGoogle,
+                      icon: const Icon(Icons.g_mobiledata,
+                          size: 32, color: Colors.red),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black87,
@@ -292,7 +259,11 @@ class _TechnicianApplicationPageState
                         ),
                       ),
                       label: _isLoading
-                          ? const CircularProgressIndicator()
+                          ? const SizedBox(
+                              width: 23,
+                              height: 23,
+                              child: CircularProgressIndicator(strokeWidth: 2.4),
+                            )
                           : const Text(
                               'التسجيل وإرسال الطلب عبر Google',
                               style: TextStyle(
@@ -303,7 +274,6 @@ class _TechnicianApplicationPageState
                     ),
                   ),
                   const SizedBox(height: 16),
-
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
