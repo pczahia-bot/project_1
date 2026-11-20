@@ -25,6 +25,16 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
   final List<String> _services = AppServices.allServices;
 
   SupabaseClient get supabase => Supabase.instance.client;
+  User? get _currentUser => supabase.auth.currentUser;
+
+  @override
+  void initState() {
+    super.initState();
+    final existingPhone = _currentUser?.userMetadata?['phone']?.toString();
+    if (existingPhone != null && existingPhone.isNotEmpty) {
+      _phoneController.text = existingPhone;
+    }
+  }
 
   @override
   void dispose() {
@@ -51,7 +61,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
     return RegExp(r'^(\+20|0020|0)?1[0125][0-9]{8}$').hasMatch(cleaned);
   }
 
-  Future<void> _submitApplicationWithGoogle() async {
+  Future<void> _submitApplication() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedServices.isEmpty) {
@@ -60,23 +70,39 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
     }
 
     setState(() => _isLoading = true);
+    final signedInBefore = _currentUser;
 
     try {
-      final payload = await AuthService.signInWithGoogle();
-      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
+      String fullName;
 
-      if (!mounted) return;
+      if (signedInBefore == null) {
+        final payload = await AuthService.signInWithGoogle();
+        if (payload == null) return; // المستخدم ألغى العملية
 
-      final user = payload.authResponse.user!;
-      final existingType = AuthService.accountTypeOf(user);
+        if (!mounted) return;
 
-      if (existingType == 'customer') {
-        await AuthService.signOut();
-        throw Exception(
-            'هذا البريد مسجل بالفعل كحساب عميل، يرجى استخدام بريد آخر للانضمام كفني.');
+        final user = payload.authResponse.user!;
+        final existingType = AuthService.accountTypeOf(user);
+
+        if (existingType == 'technician') {
+          await AuthService.signOut();
+          throw Exception(
+              'هذا الحساب مسجل كفني بالفعل، يرجى تسجيل الدخول من صفحة الفنيين.');
+        }
+
+        fullName = payload.displayName ??
+            user.userMetadata?['full_name']?.toString() ??
+            'فني صيانة';
+      } else {
+        final existingType = AuthService.accountTypeOf(signedInBefore);
+        if (existingType == 'technician') {
+          throw Exception('حسابك مسجل كفني بالفعل.');
+        }
+
+        fullName = signedInBefore.userMetadata?['full_name']?.toString() ??
+            signedInBefore.email?.split('@').first ??
+            'فني صيانة';
       }
-
-      final fullName = payload.displayName ?? 'فني صيانة';
 
       // 1) حفظ طلب الانضمام في قاعدة البيانات
       await supabase.rpc(
@@ -98,9 +124,9 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
           'تم إرسال طلب الانضمام بنجاح، يمكنك متابعة حالة الطلب من حسابك.');
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
-      // أي فشل بعد تسجيل الدخول: نخرج المستخدم حتى لا تبقى جلسة بحالة ناقصة.
-      // لو كان الطلب محفوظًا فعلًا، فتسجيل الدخول كفني سيُكمل التثبيت تلقائيًا.
-      await AuthService.signOut();
+      if (signedInBefore == null) {
+        await AuthService.signOut();
+      }
       if (mounted) {
         _showMessage(
             'حدث خطأ أثناء إرسال الطلب: ${AuthService.friendlyError(e)}');
@@ -149,11 +175,15 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isLoggedInCustomer = _currentUser != null;
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('طلب الانضمام كفني'),
+          title: Text(
+            isLoggedInCustomer ? 'التحويل إلى حساب فني' : 'طلب الانضمام كفني',
+          ),
           centerTitle: true,
           backgroundColor: technicianPrimaryColor,
           foregroundColor: Colors.white,
@@ -182,10 +212,12 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'سجل بواسطة جوجل وأدخل تفاصيل تخصصك لإرسال طلب الانضمام',
+                  Text(
+                    isLoggedInCustomer
+                        ? 'أكمل بيانات تخصصك لتحويل حسابك الحالي (${_currentUser?.email ?? ''}) إلى حساب فني'
+                        : 'سجل بواسطة جوجل وأدخل تفاصيل تخصصك لإرسال طلب الانضمام',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
+                    style: const TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 25),
                   TextFormField(
@@ -245,51 +277,84 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                   const SizedBox(height: 28),
                   SizedBox(
                     height: 52,
-                    child: ElevatedButton.icon(
-                      onPressed:
-                          _isLoading ? null : _submitApplicationWithGoogle,
-                      icon: const Icon(Icons.g_mobiledata,
-                          size: 32, color: Colors.red),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black87,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: const BorderSide(color: Colors.grey, width: 0.3),
-                        ),
-                      ),
-                      label: _isLoading
-                          ? const SizedBox(
-                              width: 23,
-                              height: 23,
-                              child: CircularProgressIndicator(strokeWidth: 2.4),
-                            )
-                          : const Text(
-                              'التسجيل وإرسال الطلب عبر Google',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                    child: isLoggedInCustomer
+                        ? ElevatedButton.icon(
+                            onPressed:
+                                _isLoading ? null : _submitApplication,
+                            icon: const Icon(Icons.check_circle_outline),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: technicianPrimaryColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                    ),
+                            label: _isLoading
+                                ? const SizedBox(
+                                    width: 23,
+                                    height: 23,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'إرسال طلب التحويل إلى فني',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                          )
+                        : ElevatedButton.icon(
+                            onPressed:
+                                _isLoading ? null : _submitApplication,
+                            icon: const Icon(Icons.g_mobiledata,
+                                size: 32, color: Colors.red),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: Colors.black87,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: const BorderSide(
+                                    color: Colors.grey, width: 0.3),
+                              ),
+                            ),
+                            label: _isLoading
+                                ? const SizedBox(
+                                    width: 23,
+                                    height: 23,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2.4),
+                                  )
+                                : const Text(
+                                    'التسجيل وإرسال الطلب عبر Google',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                          ),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text('لديك حساب بالفعل؟'),
-                      TextButton(
-                        onPressed: _openTechnicianLogin,
-                        child: const Text(
-                          'تسجيل الدخول كفني',
-                          style: TextStyle(
-                            color: technicianPrimaryColor,
-                            fontWeight: FontWeight.bold,
+                  if (!isLoggedInCustomer) ...[
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('لديك حساب بالفعل؟'),
+                        TextButton(
+                          onPressed: _openTechnicianLogin,
+                          child: const Text(
+                            'تسجيل الدخول كفني',
+                            style: TextStyle(
+                              color: technicianPrimaryColor,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'register_page.dart';
 import 'customer_login_page.dart';
 import 'login_page.dart';
+import 'technician_application_page.dart';
 import 'auth_service.dart';
 import 'models/app_services.dart';
 import 'models/maintenance_request.dart';
@@ -96,8 +97,12 @@ class _HomePageState extends State<HomePage> {
     _homeAuthSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
       if (!mounted) return;
 
-      if (data.event == AuthChangeEvent.signedIn ||
-          data.event == AuthChangeEvent.signedOut) {
+      final isAuthRefresh = data.event == AuthChangeEvent.signedIn ||
+          data.event == AuthChangeEvent.signedOut ||
+          data.event == AuthChangeEvent.tokenRefreshed ||
+          data.event == AuthChangeEvent.userUpdated;
+
+      if (isAuthRefresh) {
         final user = Supabase.instance.client.auth.currentUser;
         final isTech =
             user != null && AuthService.accountTypeOf(user) == 'technician';
@@ -3850,6 +3855,7 @@ class _AccountPageState extends State<AccountPage> {
       setState(() {});
       if (data.event == AuthChangeEvent.signedIn ||
           data.event == AuthChangeEvent.signedOut ||
+          data.event == AuthChangeEvent.tokenRefreshed ||
           data.event == AuthChangeEvent.userUpdated) {
         _loadProfileData();
       }
@@ -3956,6 +3962,14 @@ class _AccountPageState extends State<AccountPage> {
       context,
       MaterialPageRoute(builder: (_) => const RegisterPage()),
     );
+  }
+
+  Future<void> _openTechnicianApplication() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TechnicianApplicationPage()),
+    );
+    if (mounted) _loadProfileData();
   }
 
   Future<void> _editName() async {
@@ -4535,12 +4549,19 @@ class _AccountPageState extends State<AccountPage> {
               icon: Icons.handyman_outlined,
               title: 'الطلبات الجارية',
               onTap: widget.onOpenOngoing!),
-      ] else if (widget.onOpenRequests != null)
+      ] else ...[
+        if (widget.onOpenRequests != null)
+          _menuTile(
+            icon: Icons.receipt_long_outlined,
+            title: 'طلباتي',
+            onTap: widget.onOpenRequests!,
+          ),
         _menuTile(
-          icon: Icons.receipt_long_outlined,
-          title: 'طلباتي',
-          onTap: widget.onOpenRequests!,
+          icon: Icons.handyman_outlined,
+          title: 'التحويل إلى حساب فني',
+          onTap: _openTechnicianApplication,
         ),
+      ],
     ];
 
     final children = <Widget>[];
@@ -5159,10 +5180,10 @@ class _RequestPageState extends State<RequestPage> {
           title: Text(
               isEditMode ? 'تم تعديل طلبك بنجاح' : 'تم إرسال طلبك بنجاح'),
           content: Text(
-            '${isEditMode ? 'تم تحديث بيانات طلب الصيانة بنجاح.' : 'تم تسجيل طلب الصيانة في النظام بنجاح.'}\n\n'
-            '$visitDetails\n\n'
-            '${isEditMode ? 'تم حفظ التعديلات على طلبك.' : 'سيتمكن الفنيون المناسبون من الاطلاع على طلبك.'}',
-          ),
+  '${isEditMode ? 'تم تحديث بيانات طلب الصيانة بنجاح.' : 'تم تسجيل طلب الصيانة في النظام بنجاح.'}\n\n' +
+      '$visitDetails\n\n' +
+      '${isEditMode ? 'تم حفظ التعديلات على طلبك.' : 'سيتمكن الفنيون المناسبون من الاطلاع على طلبك.'}',
+),
           actions: [
             TextButton(
               onPressed: () {
