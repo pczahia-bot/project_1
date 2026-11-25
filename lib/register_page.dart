@@ -1,9 +1,8 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'auth_service.dart';
 import 'customer_login_page.dart';
 import 'technician_application_page.dart';
 
@@ -52,40 +51,46 @@ class _RegisterPageState extends State<RegisterPage> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
+    final wasSignedInBefore = supabase.auth.currentUser != null;
 
     try {
-      final googleSignIn = GoogleSignIn();
-      final googleUser = await googleSignIn.signIn();
-
-      if (googleUser == null) return;
-
-      final googleAuth = await googleUser.authentication;
-
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
-      if (accessToken == null || idToken == null) {
-        throw 'فشل في جلب بيانات المصادقة من جوجل';
-      }
-
-      final response = await supabase.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
+      final payload = await AuthService.signInWithGoogle();
+      if (payload == null) return; // المستخدم ألغى العملية
 
       if (!mounted) return;
 
-      if (response.user == null) {
-        throw 'فشل إنشاء الحساب';
+      final user = payload.authResponse.user!;
+      var accountType = AuthService.accountTypeOf(user);
+
+      if (accountType == 'technician') {
+        if (!wasSignedInBefore) {
+          await AuthService.signOut();
+        }
+        throw Exception('هذا الحساب مسجل كفني ولا يمكن استخدامه كحساب عميل');
       }
 
-      // حفظ رقم الهاتف وبيانات العميل
+      accountType ??= await AuthService.claimCustomerAccount(
+        fullName: payload.displayName,
+      );
+
+      if (accountType != 'customer') {
+        if (!wasSignedInBefore) {
+          await AuthService.signOut();
+        }
+        throw Exception('تعذر تثبيت الحساب كعميل');
+      }
+
+      final displayName = (payload.displayName?.trim().isNotEmpty == true)
+          ? payload.displayName!.trim()
+          : (user.userMetadata?['full_name']?.toString().trim().isNotEmpty ==
+                  true
+              ? user.userMetadata!['full_name'].toString().trim()
+              : 'عميل جديد');
+
       await supabase.auth.updateUser(
         UserAttributes(
           data: {
-            'full_name': googleUser.displayName ?? 'عميل جديد',
-            'account_type': 'customer',
+            'full_name': displayName,
             'phone': _phoneController.text.trim(),
           },
         ),
@@ -94,12 +99,15 @@ class _RegisterPageState extends State<RegisterPage> {
       if (!mounted) return;
 
       _showMessage('تم إنشاء حسابك وتسجيل الدخول بنجاح');
-
-      Navigator.pop(context);
-
+      Navigator.pop(context, true);
     } catch (e) {
+      if (!wasSignedInBefore) {
+        await AuthService.signOut();
+      }
       if (mounted) {
-        _showMessage('حدث خطأ أثناء إنشاء الحساب: $e');
+        _showMessage(
+          'حدث خطأ أثناء إنشاء الحساب: ${AuthService.friendlyError(e)}',
+        );
       }
     } finally {
       if (mounted) {
@@ -172,15 +180,12 @@ class _RegisterPageState extends State<RegisterPage> {
                 children: [
                   _technicianEntry(),
                   const SizedBox(height: 25),
-
                   const Icon(
                     Icons.home_repair_service_rounded,
                     size: 65,
                     color: primaryColor,
                   ),
-
                   const SizedBox(height: 10),
-
                   const Text(
                     'مرحبًا بك في صيانتي',
                     textAlign: TextAlign.center,
@@ -190,9 +195,7 @@ class _RegisterPageState extends State<RegisterPage> {
                       color: primaryColor,
                     ),
                   ),
-
                   const SizedBox(height: 8),
-
                   const Text(
                     'أدخل رقم هاتفك لإنشاء حسابك وطلب خدمات الصيانة',
                     textAlign: TextAlign.center,
@@ -201,10 +204,7 @@ class _RegisterPageState extends State<RegisterPage> {
                       color: Colors.grey,
                     ),
                   ),
-
                   const SizedBox(height: 35),
-
-                  // رقم هاتف العميل
                   TextFormField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
@@ -239,24 +239,18 @@ class _RegisterPageState extends State<RegisterPage> {
                         return 'من فضلك أدخل رقم الموبايل';
                       }
 
-                      if (!RegExp(r'^01[0125][0-9]{8}$')
-                          .hasMatch(phone)) {
+                      if (!RegExp(r'^01[0125][0-9]{8}$').hasMatch(phone)) {
                         return 'أدخل رقم موبايل مصري صحيح مكون من 11 رقمًا';
                       }
 
                       return null;
                     },
                   ),
-
                   const SizedBox(height: 25),
-
-                  // التسجيل بجوجل
                   SizedBox(
                     height: 52,
                     child: ElevatedButton.icon(
-                      onPressed: _isLoading
-                          ? null
-                          : _registerWithGoogle,
+                      onPressed: _isLoading ? null : _registerWithGoogle,
                       icon: const Icon(
                         Icons.g_mobiledata,
                         size: 32,
@@ -275,7 +269,11 @@ class _RegisterPageState extends State<RegisterPage> {
                         ),
                       ),
                       label: _isLoading
-                          ? const CircularProgressIndicator()
+                          ? const SizedBox(
+                              width: 23,
+                              height: 23,
+                              child: CircularProgressIndicator(strokeWidth: 2.3),
+                            )
                           : const Text(
                               'المتابعة بـ Google لإنشاء الحساب',
                               style: TextStyle(
@@ -285,9 +283,7 @@ class _RegisterPageState extends State<RegisterPage> {
                             ),
                     ),
                   ),
-
                   const SizedBox(height: 25),
-
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [

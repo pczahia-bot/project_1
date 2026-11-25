@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'app_theme.dart';
 import 'login_page.dart';
 import 'auth_service.dart';
 import 'models/app_services.dart';
-
-const Color technicianPrimaryColor = Color(0xFF176B65);
 
 class TechnicianApplicationPage extends StatefulWidget {
   const TechnicianApplicationPage({super.key});
@@ -55,13 +54,8 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
     );
   }
 
-  /// يقبل أرقام مصرية مثل 01012345678 أو +201012345678
-  bool _isValidPhone(String value) {
-    final cleaned = value.replaceAll(RegExp(r'[\s\-]'), '');
-    return RegExp(r'^(\+20|0020|0)?1[0125][0-9]{8}$').hasMatch(cleaned);
-  }
-
   Future<void> _submitApplication() async {
+    if (_isLoading) return;
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedServices.isEmpty) {
@@ -77,9 +71,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
 
       if (signedInBefore == null) {
         final payload = await AuthService.signInWithGoogle();
-        if (payload == null) return; // المستخدم ألغى العملية
-
-        if (!mounted) return;
+        if (payload == null) return;
 
         final user = payload.authResponse.user!;
         final existingType = AuthService.accountTypeOf(user);
@@ -104,7 +96,6 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
             'فني صيانة';
       }
 
-      // 1) حفظ طلب الانضمام في قاعدة البيانات
       await supabase.rpc(
         'submit_technician_application',
         params: {
@@ -115,7 +106,6 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
         },
       );
 
-      // 2) تثبيت نوع الحساب كفني على الخادم (غير قابل للتعديل من العميل)
       await AuthService.claimTechnicianAccount();
 
       if (!mounted) return;
@@ -156,7 +146,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
               label: Text(service),
               selected: selected,
               selectedColor: const Color(0xFFE3F3F0),
-              checkmarkColor: technicianPrimaryColor,
+              checkmarkColor: AppTheme.greenPrimary,
               onSelected: (value) {
                 setState(() {
                   if (value) {
@@ -185,7 +175,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
             isLoggedInCustomer ? 'التحويل إلى حساب فني' : 'طلب الانضمام كفني',
           ),
           centerTitle: true,
-          backgroundColor: technicianPrimaryColor,
+          backgroundColor: AppTheme.greenPrimary,
           foregroundColor: Colors.white,
         ),
         body: SafeArea(
@@ -199,7 +189,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                   const Icon(
                     Icons.handyman_rounded,
                     size: 58,
-                    color: technicianPrimaryColor,
+                    color: AppTheme.greenPrimary,
                   ),
                   const SizedBox(height: 10),
                   const Text(
@@ -208,7 +198,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
-                      color: technicianPrimaryColor,
+                      color: AppTheme.greenPrimary,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -227,7 +217,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                     decoration: InputDecoration(
                       labelText: 'رقم الهاتف للتواصل',
                       prefixIcon: const Icon(Icons.phone_outlined,
-                          color: technicianPrimaryColor),
+                          color: AppTheme.greenPrimary),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -236,7 +226,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                       if (value == null || value.trim().isEmpty) {
                         return 'رقم الهاتف مطلوب';
                       }
-                      if (!_isValidPhone(value.trim())) {
+                      if (!AppServices.isValidEgyptianPhone(value.trim())) {
                         return 'أدخل رقم هاتف مصري صحيح';
                       }
                       return null;
@@ -253,18 +243,20 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                     decoration: InputDecoration(
                       prefixIcon: const Icon(
                         Icons.location_on_outlined,
-                        color: technicianPrimaryColor,
+                        color: AppTheme.greenPrimary,
                       ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
                     items: const [
-                      DropdownMenuItem(value: 'المنصورة', child: Text('المنصورة')),
+                      DropdownMenuItem(
+                          value: 'المنصورة', child: Text('المنصورة')),
                       DropdownMenuItem(value: 'طلخا', child: Text('طلخا')),
                       DropdownMenuItem(value: 'أجا', child: Text('أجا')),
                       DropdownMenuItem(value: 'شربين', child: Text('شربين')),
-                      DropdownMenuItem(value: 'ميت غمر', child: Text('ميت غمر')),
+                      DropdownMenuItem(
+                          value: 'ميت غمر', child: Text('ميت غمر')),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -279,11 +271,10 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                     height: 52,
                     child: isLoggedInCustomer
                         ? ElevatedButton.icon(
-                            onPressed:
-                                _isLoading ? null : _submitApplication,
+                            onPressed: _isLoading ? null : _submitApplication,
                             icon: const Icon(Icons.check_circle_outline),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: technicianPrimaryColor,
+                              backgroundColor: AppTheme.greenPrimary,
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -307,8 +298,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                                   ),
                           )
                         : ElevatedButton.icon(
-                            onPressed:
-                                _isLoading ? null : _submitApplication,
+                            onPressed: _isLoading ? null : _submitApplication,
                             icon: const Icon(Icons.g_mobiledata,
                                 size: 32, color: Colors.red),
                             style: ElevatedButton.styleFrom(
@@ -347,7 +337,7 @@ class _TechnicianApplicationPageState extends State<TechnicianApplicationPage> {
                           child: const Text(
                             'تسجيل الدخول كفني',
                             style: TextStyle(
-                              color: technicianPrimaryColor,
+                              color: AppTheme.greenPrimary,
                               fontWeight: FontWeight.bold,
                             ),
                           ),

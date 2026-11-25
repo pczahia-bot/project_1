@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'app_theme.dart';
 import 'technician_application_page.dart';
 import 'auth_service.dart';
 
@@ -13,20 +14,17 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
 
-  static const Color _primaryColor = Color(0xFF087F8C);
-  static const Color _backgroundColor = Color(0xFFF5F8FA);
-
   Future<void> _signInWithGoogle() async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
     final supabase = Supabase.instance.client;
 
     try {
       final payload = await AuthService.signInWithGoogle();
-      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
+      if (payload == null) return;
 
       final user = payload.authResponse.user!;
 
-      // طلب الانضمام (إن وُجد) — يُجلب مرة واحدة ويُستخدم أدناه
       final profile = await supabase
           .from('technician_profiles')
           .select('is_approved, application_status')
@@ -35,19 +33,19 @@ class _LoginPageState extends State<LoginPage> {
 
       var accountType = AuthService.accountTypeOf(user);
 
-      // إصلاح تلقائي: الطلب محفوظ لكن نوع الحساب لم يُثبَّت (فشل سابق في الخطوة الأخيرة)
+      if (accountType == 'customer') {
+        await AuthService.signOut();
+        throw Exception(
+            'هذا الحساب مسجل كعميل. يمكنك التحويل إلى حساب فني من صفحة حسابي.');
+      }
+
       if (accountType == null && profile != null) {
         accountType = await AuthService.claimTechnicianAccount();
       }
 
-      if (accountType != 'technician') {
+      if (accountType != 'technician' || profile == null) {
         await AuthService.signOut();
-        throw Exception('هذا الحساب ليس حساب فني مسجل');
-      }
-
-      if (profile == null) {
-        await AuthService.signOut();
-        throw Exception('لم يتم العثور على طلب انضمام الفني الخاص بك');
+        throw Exception('لم يتم العثور على حساب فني مسجل لهذا البريد');
       }
 
       if (!mounted) return;
@@ -58,12 +56,13 @@ class _LoginPageState extends State<LoginPage> {
           content: Text(isApproved
               ? 'تم تسجيل الدخول بنجاح'
               : 'تم تسجيل الدخول — حسابك قيد مراجعة الإدارة'),
-          backgroundColor: _primaryColor,
+          backgroundColor: AppTheme.tealPrimary,
         ),
       );
 
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (error) {
+      await AuthService.signOut();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -92,11 +91,11 @@ class _LoginPageState extends State<LoginPage> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: _backgroundColor,
+        backgroundColor: AppTheme.lightBg,
         appBar: AppBar(
-          backgroundColor: _backgroundColor,
+          backgroundColor: AppTheme.lightBg,
           elevation: 0,
-          foregroundColor: _primaryColor,
+          foregroundColor: AppTheme.tealPrimary,
           title: const Text(
             'تسجيل دخول الفني',
             style: TextStyle(fontWeight: FontWeight.bold),
@@ -117,12 +116,12 @@ class _LoginPageState extends State<LoginPage> {
                       height: 82,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: _primaryColor.withValues(alpha: 0.10),
+                        color: AppTheme.tealPrimary.withValues(alpha: 0.10),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
                         Icons.home_repair_service_rounded,
-                        color: _primaryColor,
+                        color: AppTheme.tealPrimary,
                         size: 42,
                       ),
                     ),
@@ -155,14 +154,16 @@ class _LoginPageState extends State<LoginPage> {
                           elevation: 1,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
-                            side: const BorderSide(color: Colors.grey, width: 0.3),
+                            side: const BorderSide(
+                                color: Colors.grey, width: 0.3),
                           ),
                         ),
                         label: _isLoading
                             ? const SizedBox(
                                 width: 23,
                                 height: 23,
-                                child: CircularProgressIndicator(strokeWidth: 2.4),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2.4),
                               )
                             : const Text(
                                 'تسجيل الدخول بجوجل',

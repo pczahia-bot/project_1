@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:project_1/app_theme.dart';
 
-import '../app_theme.dart';
 import '../auth_service.dart';
 import '../customer_login_page.dart';
 import '../login_page.dart';
@@ -941,7 +941,7 @@ class _AccountPageState extends State<AccountPage> {
           ),
         ),
         const SizedBox(height: 4),
-        const Text(
+        Text(
           'دخول الفنيين',
           style: TextStyle(
             color: AppTheme.primaryBlue,
@@ -962,11 +962,14 @@ class _AccountPageState extends State<AccountPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const CircleAvatar(
+                CircleAvatar(
                   radius: 43,
                   backgroundColor: AppTheme.scaffoldBg,
-                  child: Icon(Icons.person_outline,
-                      size: 52, color: AppTheme.primaryBlue),
+                  child: Icon(
+                    Icons.person_outline,
+                    size: 52,
+                    color: AppTheme.primaryBlue,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -1004,7 +1007,7 @@ class _AccountPageState extends State<AccountPage> {
                     onPressed: _openRegister,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppTheme.primaryBlue,
-                      side: const BorderSide(color: AppTheme.primaryBlue),
+                      side: BorderSide(color: AppTheme.primaryBlue),
                     ),
                   ),
                 ),

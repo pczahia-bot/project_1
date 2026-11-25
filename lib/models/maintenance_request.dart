@@ -28,4 +28,36 @@ class MaintenanceRequest {
     this.longitude,
     this.status = 'بانتظار قبول فني',
   });
+
+  MaintenanceRequest copyWith({
+    String? id,
+    String? number,
+    String? service,
+    String? description,
+    String? address,
+    String? visitType,
+    DateTime? visitDateTime,
+    int? imagesCount,
+    List<String>? imageUrls,
+    DateTime? createdAt,
+    double? latitude,
+    double? longitude,
+    String? status,
+  }) {
+    return MaintenanceRequest(
+      id: id ?? this.id,
+      number: number ?? this.number,
+      service: service ?? this.service,
+      description: description ?? this.description,
+      address: address ?? this.address,
+      visitType: visitType ?? this.visitType,
+      visitDateTime: visitDateTime ?? this.visitDateTime,
+      imagesCount: imagesCount ?? this.imagesCount,
+      imageUrls: imageUrls ?? this.imageUrls,
+      createdAt: createdAt ?? this.createdAt,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      status: status ?? this.status,
+    );
+  }
 }

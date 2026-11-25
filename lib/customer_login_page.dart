@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_theme.dart';
 import 'auth_service.dart';
 import 'register_page.dart';
 
@@ -12,34 +13,38 @@ class CustomerLoginPage extends StatefulWidget {
 class _CustomerLoginPageState extends State<CustomerLoginPage> {
   bool _loading = false;
 
-  static const primaryColor = Color(0xFF087F8C);
-  static const backgroundColor = Color(0xFFF5F8FA);
-  static const textColor = Color(0xFF263746);
-  static const hintColor = Color(0xFF82909C);
-
   Future<void> _signInWithGoogle() async {
+    if (_loading) return;
     setState(() => _loading = true);
 
     try {
       final payload = await AuthService.signInWithGoogle();
-      if (payload == null) return; // المستخدم ألغى العملية (finally يعيد الحالة)
-
-      if (!mounted) return;
+      if (payload == null) return;
 
       final user = payload.authResponse.user!;
       var accountType = AuthService.accountTypeOf(user);
 
-      // أول دخول: تثبيت نوع الحساب كعميل على الخادم
+      if (accountType == 'technician') {
+        await AuthService.signOut();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('هذا الحساب مسجل كفني وليس كعميل'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
       accountType ??=
           await AuthService.claimCustomerAccount(fullName: payload.displayName);
 
       if (accountType != 'customer') {
         await AuthService.signOut();
         if (!mounted) return;
-
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('هذا الحساب مسجل كفني وليس كعميل'),
+            content: Text('تعذر التحقق من نوع الحساب كعميل'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -60,8 +65,8 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-              Text('حدث خطأ أثناء تسجيل الدخول: ${AuthService.friendlyError(e)}'),
+          content: Text(
+              'حدث خطأ أثناء تسجيل الدخول: ${AuthService.friendlyError(e)}'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -84,14 +89,14 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: backgroundColor,
+        backgroundColor: AppTheme.lightBg,
         appBar: AppBar(
           title: const Text(
             'تسجيل دخول العميل',
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
           ),
-          backgroundColor: backgroundColor,
-          foregroundColor: textColor,
+          backgroundColor: AppTheme.lightBg,
+          foregroundColor: AppTheme.textDark,
           centerTitle: true,
           elevation: 0,
         ),
@@ -107,13 +112,13 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
                       width: 76,
                       height: 76,
                       decoration: BoxDecoration(
-                        color: primaryColor.withValues(alpha: 0.11),
+                        color: AppTheme.tealPrimary.withValues(alpha: 0.11),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
                         Icons.home_repair_service_rounded,
                         size: 40,
-                        color: primaryColor,
+                        color: AppTheme.tealPrimary,
                       ),
                     ),
                   ),
@@ -124,14 +129,18 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: textColor,
+                      color: AppTheme.textDark,
                     ),
                   ),
                   const SizedBox(height: 8),
                   const Text(
                     'سجل دخولك باستخدام حساب جوجل لمتابعة طلبات الصيانة',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: hintColor, height: 1.6),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppTheme.hintGrey,
+                      height: 1.6,
+                    ),
                   ),
                   const SizedBox(height: 45),
                   SizedBox(
@@ -142,18 +151,20 @@ class _CustomerLoginPageState extends State<CustomerLoginPage> {
                           size: 32, color: Colors.red),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
-                        foregroundColor: textColor,
+                        foregroundColor: AppTheme.textDark,
                         elevation: 1,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(13),
-                          side: const BorderSide(color: Colors.grey, width: 0.3),
+                          side:
+                              const BorderSide(color: Colors.grey, width: 0.3),
                         ),
                       ),
                       label: _loading
                           ? const SizedBox(
                               width: 23,
                               height: 23,
-                              child: CircularProgressIndicator(strokeWidth: 2.3),
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2.3),
                             )
                           : const Text(
                               'المتابعة باستخدام جوجل',
