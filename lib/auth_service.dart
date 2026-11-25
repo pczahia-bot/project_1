@@ -14,8 +14,6 @@ class GoogleSignInPayload {
 class AuthService {
   static SupabaseClient get _supabase => Supabase.instance.client;
 
-  /// معرّف عميل جوجل (عام وليس سرًا). يمكن تغييره دون تعديل الكود:
-  /// flutter run --dart-define=GOOGLE_SERVER_CLIENT_ID=xxxx
   static const String _googleServerClientId = String.fromEnvironment(
     'GOOGLE_SERVER_CLIENT_ID',
     defaultValue:
@@ -35,7 +33,7 @@ class AuthService {
   /// تسجيل الدخول عبر جوجل وإرجاع استجابة Supabase مع اسم العرض من جوجل
   static Future<GoogleSignInPayload?> signInWithGoogle() async {
     final googleUser = await _googleSignIn.signIn();
-    if (googleUser == null) return null; // المستخدم ألغى العملية
+    if (googleUser == null) return null;
 
     final googleAuth = await googleUser.authentication;
     final accessToken = googleAuth.accessToken;
@@ -78,7 +76,7 @@ class AuthService {
     return result?.toString() ?? 'technician';
   }
 
-  /// هل الفني الحالي معتمد من الإدارة؟ استخدمها لمنع ميزات الفني قبل الاعتماد
+  /// هل الفني الحالي معتمد من الإدارة؟
   static Future<bool> isTechnicianApproved() async {
     final user = _supabase.auth.currentUser;
     if (user == null) return false;
@@ -97,13 +95,23 @@ class AuthService {
     return error.toString().replaceFirst('Exception: ', '');
   }
 
-  /// تسجيل الخروج بالكامل (من Supabase ومن Google لضمان ظهور قائمة الحسابات مجدداً)
+  /// حذف حساب المستخدم الحالي نهائيًا (عميل أو فني) وتنظيف الجلسة
+  static Future<void> deleteAccount() async {
+    await _supabase.rpc('delete_my_account');
+    await signOut();
+  }
+
+  /// تسجيل الخروج الآمن بالكامل (من Supabase ومن Google) دون إبقاء جلسة معلّقة
   static Future<void> signOut() async {
     try {
-      await _googleSignIn.signOut();
-    } catch (_) {}
+      await _googleSignIn.disconnect();
+    } catch (_) {
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
+    }
     try {
-      await _supabase.auth.signOut();
+      await _supabase.auth.signOut(scope: SignOutScope.local);
     } catch (_) {}
   }
 }
